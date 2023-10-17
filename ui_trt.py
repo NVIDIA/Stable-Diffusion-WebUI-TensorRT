@@ -886,12 +886,4 @@ def on_ui_tabs():
             outputs=[trt_result],
         )
 
-        # TODO Dynamically update available profiles. Not possible with gradio?!
-        # button_refresh_profiles.click(
-        #         fn=shared.state.request_restart,
-        #         _js='restart_reload',
-        #         inputs=[],
-        #         outputs=[],
-        # )
-
     return [(trt_interface, "TensorRT", "tensorrt")]
