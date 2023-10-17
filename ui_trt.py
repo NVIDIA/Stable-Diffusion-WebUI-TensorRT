@@ -815,6 +815,7 @@ def on_ui_tabs():
                 with open(
                     os.path.join(os.path.dirname(os.path.abspath(__file__)), "info.md"),
                     "r",
+                    encoding='utf-8',
                 ) as f:
                     trt_info = gr.Markdown(elem_id="trt_info", value=f.read())
 
