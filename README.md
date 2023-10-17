@@ -4,7 +4,7 @@ This extension enables the best performance on NVIDIA RTX GPUs for Stable Diffus
 
 You need to install the extension and generate optimized engines before using the extension. Please follow the instructions below to set everything up. 
 
-Supports Stable Diffusion 1.5, 2.1, and SDXL.
+Supports Stable Diffusion 1.5 and 2.1. Native SDXL support coming in a future release. Please use the [dev branch](https://github.com/AUTOMATIC1111/stable-diffusion-webui/tree/dev) if you would like to use it today. Note that the Dev branch is not intended for production work and may break other things that you are currently using.
 
 ## Installation
 
