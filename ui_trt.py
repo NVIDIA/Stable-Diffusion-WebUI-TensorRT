@@ -557,10 +557,14 @@ def get_lora_checkpoints():
     )
     for filename in canditates:
         name = os.path.splitext(os.path.basename(filename))[0]
-        metadata = sd_models.read_metadata_from_safetensors(filename)
+        try:
+            metadata = sd_models.read_metadata_from_safetensors(filename)
+            version = get_version_from_filename(metadata.get("ss_sd_model_name"))
+        except (AssertionError, TypeError):
+            version = "Unknown"
         available_lora_models[name] = {
             "filename": filename,
-            "version": get_version_from_filename(metadata.get("ss_sd_model_name")),
+            "version": version,
         }
     return available_lora_models
 
