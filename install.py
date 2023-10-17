@@ -1,5 +1,5 @@
 import launch
-from modules import shared
+
 
 def install():
     if not launch.is_installed("tensorrt"):
@@ -19,12 +19,5 @@ def install():
         launch.run_pip("install protobuf==3.20.2", "protobuf", live=True)
         launch.run_pip('install onnx-graphsurgeon --extra-index-url https://pypi.ngc.nvidia.com', "onnx-graphsurgeon", live=True)
 
-    if shared.opts is None:
-        print("UI Config not initialized")
-        return 
-    
-    if "sd_unet" not in shared.opts["quicksettings_list"]:
-        shared.opts["quicksettings_list"].append("sd_unet")
-        shared.opts.save(shared.config_filename)
  
 install()
