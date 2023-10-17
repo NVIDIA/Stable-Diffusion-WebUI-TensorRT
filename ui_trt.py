@@ -85,7 +85,7 @@ def export_unet_to_trt(
         logging_history = log_md(
             logging_history, "FP16 has been disabled because your GPU does not support it."
         )
-        yield logging_history
+        print(logging_history)
 
     unet_hidden_dim = shared.sd_model.model.diffusion_model.in_channels
     if unet_hidden_dim == 9:
@@ -98,7 +98,7 @@ def export_unet_to_trt(
     logging_history = log_md(
         logging_history, f"Exporting {model_name} to TensorRT", prefix="###"
     )
-    yield logging_history
+    print(logging_history)
 
     timing_cache = modelmanager.get_timing_cache()
 
@@ -150,7 +150,7 @@ def export_unet_to_trt(
 
     if not os.path.exists(onnx_path):
         logging_history = log_md(logging_history, "No ONNX file found. Exporting ONNX…")
-        yield logging_history
+        print(logging_history)
         export_onnx(
             onnx_path,
             modelobj,
@@ -158,7 +158,7 @@ def export_unet_to_trt(
             diable_optimizations=diable_optimizations,
         )
         logging_history = log_md(logging_history, "Exported to ONNX.")
-        yield logging_history
+        print(logging_history)
 
     trt_engine_filename, trt_path = modelmanager.get_trt_path(
         model_name, model_hash, profile, static_shapes
@@ -169,7 +169,7 @@ def export_unet_to_trt(
             logging_history,
             "Building TensorRT engine... This can take a while, please check the progress in the terminal.",
         )
-        yield logging_history
+        print(logging_history)
         gc.collect()
         torch.cuda.empty_cache()
         ret = export_trt(
@@ -180,12 +180,12 @@ def export_unet_to_trt(
             use_fp16=not use_fp32,
         )
         if ret:
-            yield logging_history + "\n --- \n ## Export Failed due to unknown reason. See shell for more information. \n"
+            print(logging_history + "\n --- \n ## Export Failed due to unknown reason. See shell for more information. \n")
             return
         logging_history = log_md(
             logging_history, "TensorRT engines has been saved to disk."
         )
-        yield logging_history
+        print(logging_history)
         modelmanager.add_entry(
             model_name,
             model_hash,
@@ -203,9 +203,9 @@ def export_unet_to_trt(
             logging_history,
             "TensorRT engine found. Skipping build. You can enable Force Export in the Advanced Settings to force a rebuild if needed.",
         )
-        yield logging_history
+        print(logging_history)
 
-    yield logging_history + "\n --- \n ## Exported Successfully \n"
+    print(logging_history + "\n --- \n ## Exported Successfully \n")
 
 
 def export_lora_to_trt(lora_name, force_export):
@@ -217,7 +217,7 @@ def export_lora_to_trt(lora_name, force_export):
         logging_history = log_md(
             logging_history, "FP16 has been disabled because your GPU does not support it."
         )
-        yield logging_history
+        print(logging_history)
     unet_hidden_dim = shared.sd_model.model.diffusion_model.in_channels
     if unet_hidden_dim == 9:
         is_inpaint = True
@@ -262,7 +262,7 @@ def export_lora_to_trt(lora_name, force_export):
 
     if not os.path.exists(onnx_lora_path):
         logging_history = log_md(logging_history, "No ONNX file found. Exporting ONNX…")
-        yield logging_history
+        print(logging_history)
         export_onnx(
             onnx_lora_path,
             modelobj,
@@ -273,7 +273,7 @@ def export_lora_to_trt(lora_name, force_export):
             lora_path=lora_model["filename"],
         )
         logging_history = log_md(logging_history, "Exported to ONNX.")
-        yield logging_history
+        print(logging_history)
 
     trt_lora_name = onnx_lora_filename.replace(".onnx", ".trt")
     trt_lora_path = os.path.join(TRT_MODEL_DIR, trt_lora_name)
@@ -281,7 +281,7 @@ def export_lora_to_trt(lora_name, force_export):
     available_trt_unet = modelmanager.available_models()
     if len(available_trt_unet[base_name]) == 0:
         logging_history = log_md(logging_history, "Please export the base model first.")
-        yield logging_history
+        print(logging_history)
     trt_base_path = os.path.join(
         TRT_MODEL_DIR, available_trt_unet[base_name][0]["filepath"]
     )
@@ -293,12 +293,12 @@ def export_lora_to_trt(lora_name, force_export):
         logging_history = log_md(
             logging_history, "No TensorRT engine found. Building..."
         )
-        yield logging_history
+        print(logging_history)
         engine = Engine(trt_base_path)
         engine.load()
         engine.refit(onnx_base_path, onnx_lora_path, dump_refit_path=trt_lora_path)
         logging_history = log_md(logging_history, "Built TensorRT engine.")
-        yield logging_history
+        print(logging_history)
 
         modelmanager.add_lora_entry(
             base_name,
@@ -309,7 +309,7 @@ def export_lora_to_trt(lora_name, force_export):
             0,
             unet_hidden_dim,
         )
-    yield logging_history + "\n --- \n ## Exported Successfully \n"
+    print(logging_history + "\n --- \n ## Exported Successfully \n")
 
 
 def export_default_unet_to_trt():
