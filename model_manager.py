@@ -63,7 +63,9 @@ class ModelManager:
             for trt_file in os.listdir(TRT_MODEL_DIR)
             if trt_file.endswith(".trt")
         ]
-        for cc, base_models in self.all_models.items():
+
+        tmp_all_models = self.all_models.copy()
+        for cc, base_models in tmp_all_models.items():
             for base_model, models in base_models.items():
                 tmp_config_list = {}
                 for model_config in models:
