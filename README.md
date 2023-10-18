@@ -32,12 +32,14 @@ TensorRT uses optimized engines for specific resolutions and batch sizes. You ca
 - Static engines support a single specific output resolution and batch size. 
 - Dynamic engines support a range of resolutions and batch sizes, at a small cost in performance. Wider ranges will use more VRAM. 
 
-Each preset can be adjusted with the “Advanced Settings” option.
+Each preset can be adjusted with the “Advanced Settings” option. More detailed instructions can be found [here](https://nvidia.custhelp.com/app/answers/detail/a_id/5487/~/tensorrt-extension-for-stable-diffusion-web-ui).
 
-### Common Issues
+### Common Issues/Limitations
 
 **HIRES FIX:** If using the hires.fix option in Automatic1111 you must build engines that match both the starting and ending resolutions. For instance, if initial size is `512 x 512` and hires.fix upscales to `1024 x 1024`, you must either generate two engines, one at 512 and one at 1024, or generate a single dynamic engine that covers the whole range.
 Having two seperate engines will heavily impact performance at the moment. Stay tuned for updates.
+
+**Resolution:** When generating images the resolution needs to be a multiple of 64. This applies to hires.fix as well, requiring the low and high-res to be divisible by 64.
 
 **Failing CMD arguments:**
 
