@@ -23,7 +23,7 @@ def install():
         launch.run_pip("install polygraphy --extra-index-url https://pypi.ngc.nvidia.com", "polygraphy", live=True)
     
     # ONNX GS
-    if not launch.is_installed("onnx-graphsurgeon"):
+    if not launch.is_installed("onnx_graphsurgeon"):
         print("GS is not installed! Installing...")
         launch.run_pip("install protobuf==3.20.2", "protobuf", live=True)
         launch.run_pip('install onnx-graphsurgeon --extra-index-url https://pypi.ngc.nvidia.com', "onnx-graphsurgeon", live=True)
