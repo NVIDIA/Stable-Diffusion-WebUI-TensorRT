@@ -24,6 +24,10 @@ Example instructions for Automatic1111:
 
 Happy prompting!
 
+## Hires.fix
+
+If using the hires.fix option in Automatic1111 you must build engines that match both the starting and ending resolutions. For instance, if initial size is `512 x 512` and hires.fix upscales to `1024 x 1024`, you must generate engines optimized for both of these resolutions. Otherwise, image generation will fail.
+
 ## More Information
 
 TensorRT uses optimized engines for specific resolutions and batch sizes. You can generate as many optimized engines as desired. Types:
