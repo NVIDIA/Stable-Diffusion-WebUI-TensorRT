@@ -228,7 +228,7 @@ class Engine:
         refitter = trt.Refitter(self.engine, TRT_LOGGER)
         all_weights = refitter.get_all()
         for layer_name, role in zip(all_weights[0], all_weights[1]):
-            # for speciailized roles, use a unique name in the map:
+            # for specialized roles, use a unique name in the map:
             if role == trt.WeightsRole.KERNEL:
                 name = layer_name + "_TRTKERNEL"
             elif role == trt.WeightsRole.BIAS:
