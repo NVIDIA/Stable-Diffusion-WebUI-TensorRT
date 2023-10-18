@@ -827,23 +827,19 @@ def on_ui_tabs():
             with gr.Accordion("Output", open=True):
                 trt_result = gr.Markdown(elem_id="trt_result", value="")
 
-        with gr.Column(variant="panel"):
-            with gr.Row(equal_height=True, variant="compact"):
-                button_refresh_profiles = ToolButton(value=refresh_symbol, elem_id="trt_refresh_profiles", visible=True)
-                profile_header_md = gr.Markdown(
-                    value=f"## Available TensorRT Engine Profiles"
-                )
-            engines_md = engine_profile_card()
-            for model, profiles in engines_md.items():
-                with gr.Row(equal_height=False):
-                    row_name = model + " ({} Profiles)".format(len(profiles))
-                    with gr.Accordion(row_name, open=False):
-                        out_string = ""
-                        for i, profile in enumerate(profiles):
-                            out_string += f"#### Profile {i} \n"
-                            out_string += profile
-                            out_string += "\n\n"
-                        gr.Markdown(elem_id=f"trt_{model}_{i}", value=out_string)
+        def get_trt_profiles_markdown():
+            profiles_md_string = "<details><summary>Available TensorRT Engine Profiles</summary>\n\n"
+            for model, profiles in engine_profile_card().items():
+                profiles_md_string += f"<details><summary>{model} ({len(profiles)} Profiles)</summary>\n\n"
+                for i, profile in enumerate(profiles):
+                    profiles_md_string += f"#### Profile {i} \n{profile}\n\n"
+                profiles_md_string += "</details>\n"
+            profiles_md_string += "</details>\n"
+            return profiles_md_string
+
+        button_refresh_profiles = ToolButton(value=refresh_symbol, elem_id="trt_refresh_profiles", visible=True)
+        trt_profiles_markdown = gr.Markdown(elem_id=f"trt_profiles_markdown", value=get_trt_profiles_markdown())
+        button_refresh_profiles.click(lambda: gr.Markdown.update(value=get_trt_profiles_markdown()), outputs=[trt_profiles_markdown])
 
         button_export_unet.click(
             export_unet_to_trt,
@@ -893,15 +889,6 @@ def on_ui_tabs():
             export_lora_to_trt,
             inputs=[trt_lora_dropdown, trt_lora_force_rebuild],
             outputs=[trt_result],
-        )
-
-        
-        # TODO Dynamically update available profiles. Not possible with gradio?!
-        button_refresh_profiles.click(
-                fn=shared.state.request_restart,
-                _js='restart_reload',
-                inputs=[],
-                outputs=[],
         )
 
     return [(trt_interface, "TensorRT", "tensorrt")]
