@@ -1,6 +1,5 @@
 import json
 from json import JSONEncoder
-
 import os
 from logging import info, warning
 from dataclasses import dataclass
@@ -28,7 +27,7 @@ class ModelManager:
         self.model_file = model_file
         self.cc = "cc{}{}".format(cc_major, cc_minor)
         if not os.path.exists(model_file):
-            warning("Model file does not exist. Creating new one.")
+            warning("Model file does not exist. Creating a new one.")
         else:
             self.all_models = self.read_json()
 
@@ -63,25 +62,35 @@ class ModelManager:
             for trt_file in os.listdir(TRT_MODEL_DIR)
             if trt_file.endswith(".trt")
         ]
+
         for cc, base_models in self.all_models.items():
+            # Create a list of keys to remove after iterating
+            keys_to_remove = []
+
             for base_model, models in base_models.items():
                 tmp_config_list = {}
                 for model_config in models:
                     if model_config["filepath"] not in trt_engines:
                         info(
-                            "Model config outdated. {} was not found".format(model_config["filepath"])
+                            "Model config outdated. {} was not found".format(
+                                model_config["filepath"]
+                            )
                         )
                         continue
                     tmp_config_list[model_config["filepath"]] = model_config
-                
-                tmp_config_list = list(tmp_config_list.values()) 
+
+                tmp_config_list = list(tmp_config_list.values())
+
                 if len(tmp_config_list) == 0:
-                    self.all_models[cc].pop(base_model)
+                    keys_to_remove.append(base_model)  # Mark this key for removal
                 else:
                     self.all_models[cc][base_model] = models
 
-        self.write_json()
+            # Remove the keys that were marked for removal
+            for key in keys_to_remove:
+                self.all_models[cc].pop(key)
 
+        self.write_json()
 
     def __del__(self):
         self.update()
