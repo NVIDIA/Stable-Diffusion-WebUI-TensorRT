@@ -828,7 +828,7 @@ def on_ui_tabs():
                 trt_result = gr.Markdown(elem_id="trt_result", value="")
 
         def get_trt_profiles_markdown():
-            profiles_md_string = "<details><summary>Available TensorRT Engine Profiles</summary>\n\n"
+            profiles_md_string = ""
             for model, profiles in engine_profile_card().items():
                 profiles_md_string += f"<details><summary>{model} ({len(profiles)} Profiles)</summary>\n\n"
                 for i, profile in enumerate(profiles):
@@ -837,8 +837,16 @@ def on_ui_tabs():
             profiles_md_string += "</details>\n"
             return profiles_md_string
 
-        button_refresh_profiles = ToolButton(value=refresh_symbol, elem_id="trt_refresh_profiles", visible=True)
-        trt_profiles_markdown = gr.Markdown(elem_id=f"trt_profiles_markdown", value=get_trt_profiles_markdown())
+
+        with gr.Column(variant="panel"):
+            with gr.Row(equal_height=True, variant="compact"):
+                button_refresh_profiles = ToolButton(value=refresh_symbol, elem_id="trt_refresh_profiles", visible=True)
+                profile_header_md = gr.Markdown(
+                    value=f"## Available TensorRT Engine Profiles"
+                )
+            with gr.Row(equal_height=True):
+                trt_profiles_markdown = gr.Markdown(elem_id=f"trt_profiles_markdown", value=get_trt_profiles_markdown())
+        
         button_refresh_profiles.click(lambda: gr.Markdown.update(value=get_trt_profiles_markdown()), outputs=[trt_profiles_markdown])
 
         button_export_unet.click(
