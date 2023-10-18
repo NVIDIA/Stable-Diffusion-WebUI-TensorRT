@@ -106,7 +106,7 @@ class TrtUnet(sd_unet.SdUnet):
         )
         if len(valid_models) == 0:
             raise ValueError(
-                "No valid profile found. Please go to the TensorRT tab and generate an engine with the necessary profile. Or use the default (torch) U-Net."
+                "No valid profile found. Please go to the TensorRT tab and generate an engine with the necessary profile. If using hires.fix, you need an engine for both the base and upscaled resolutions. Otherwise, use the default (torch) U-Net."
             )
 
         best = valid_models[np.argmin(distances)]
