@@ -55,4 +55,4 @@ Having two seperate engines will heavily impact performance at the moment. Stay 
 - Linux: >= 450.80.02
 - Windows: >=452.39
 
-We always recommend keeping the driver up-to-date for system wide performance improvments.
+We always recommend keeping the driver up-to-date for system wide performance improvements.
