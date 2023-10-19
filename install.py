@@ -9,8 +9,8 @@ def install():
     
     if not launch.is_installed("tensorrt"):
         print("TensorRT is not installed! Installing...")
-        launch.run_pip("install nvidia-cudnn-cu11==8.9.4.25", "nvidia-cudnn-cu11")
-        launch.run_pip("install --pre --extra-index-url https://pypi.nvidia.com tensorrt==9.0.1.post11.dev4", "tensorrt", live=True)
+        launch.run_pip("install nvidia-cudnn-cu11==8.9.4.25 --no-cache-dir", "nvidia-cudnn-cu11")
+        launch.run_pip("install --pre --extra-index-url https://pypi.nvidia.com tensorrt==9.0.1.post11.dev4 --no-cache-dir", "tensorrt", live=True)
         launch.run(["python","-m","pip","uninstall","-y","nvidia-cudnn-cu11"], "removing nvidia-cudnn-cu11")
         
     if launch.is_installed("nvidia-cudnn-cu11"):
