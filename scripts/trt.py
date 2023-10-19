@@ -77,7 +77,7 @@ class TrtUnet(sd_unet.SdUnet):
         if "y" in kwargs:
             feed_dict["y"] = kwargs["y"].float()
 
-        # Need to check compatability on the fly
+        # Need to check compatibility on the fly
         if self.shape_hash != hash(x.shape):
             nvtx.range_push("switch_engine")
             if x.shape[-1] % 8 or x.shape[-2] % 8:
