@@ -4,7 +4,7 @@ This extension enables the best performance on NVIDIA RTX GPUs for Stable Diffus
 
 You need to install the extension and generate optimized engines before using the extension. Please follow the instructions below to set everything up. 
 
-Supports Stable Diffusion 1.5 and 2.1. Native SDXL support coming in a future release. Please use the [dev branch](https://github.com/AUTOMATIC1111/stable-diffusion-webui/tree/dev) if you would like to use it today. Note that the Dev branch is not intended for production work and may break other things that you are currently using.
+Supports Stable Diffusion 1.5 and 2.1. Native SDXL support is coming in a future release. Please use the [dev branch](https://github.com/AUTOMATIC1111/stable-diffusion-webui/tree/dev) if you would like to use it today. Note that the Dev branch is not intended for production work and may break other things that you are currently using.
 
 ## Installation
 
@@ -13,7 +13,7 @@ Example instructions for Automatic1111:
 1. Start the webui.bat
 2. Select the Extensions tab and click on Install from URL
 3. Copy the link to this repository and paste it into URL for extension's git repository
-4. Click Install
+4. Click Install.
 
 ## How to use
 
@@ -26,18 +26,18 @@ Happy prompting!
 
 ## More Information
 
-TensorRT uses optimized engines for specific resolutions and batch sizes. You can generate as many optimized engines as desired. Types:
+TensorRT uses optimized engines for specific resolutions and batch sizes. You can generate as many optimized engines as you desire. Types:
 
 - The "Export Default Engines” selection adds support for resolutions between 512x512 and 768x768 for Stable Diffusion 1.5 and 768x768 to 1024x1024 for SDXL with batch sizes 1 to 4.
 - Static engines support a single specific output resolution and batch size. 
-- Dynamic engines support a range of resolutions and batch sizes, at a small cost in performance. Wider ranges will use more VRAM. 
+- Dynamic engines support a range of resolutions and batch sizes, at a small cost in terms of performance. Wider ranges will use more VRAM. 
 
 Each preset can be adjusted with the “Advanced Settings” option. More detailed instructions can be found [here](https://nvidia.custhelp.com/app/answers/detail/a_id/5487/~/tensorrt-extension-for-stable-diffusion-web-ui).
 
 ### Common Issues/Limitations
 
-**HIRES FIX:** If using the hires.fix option in Automatic1111 you must build engines that match both the starting and ending resolutions. For instance, if initial size is `512 x 512` and hires.fix upscales to `1024 x 1024`, you must either generate two engines, one at 512 and one at 1024, or generate a single dynamic engine that covers the whole range.
-Having two seperate engines will heavily impact performance at the moment. Stay tuned for updates.
+**HIRES FIX:** If using the hires.fix option in Automatic1111 you must build engines that match both the starting and ending resolutions. For instance, if the initial size is `512 x 512` and hires.fix upscales to `1024 x 1024`, you must either generate two engines, one at 512 and one at 1024, or generate a single dynamic engine that covers the whole range.
+Having two separate engines will heavily impact performance at the moment. Stay tuned for updates.
 
 **Resolution:** When generating images the resolution needs to be a multiple of 64. This applies to hires.fix as well, requiring the low and high-res to be divisible by 64.
 
@@ -55,4 +55,4 @@ Having two seperate engines will heavily impact performance at the moment. Stay 
 - Linux: >= 450.80.02
 - Windows: >=452.39
 
-We always recommend keeping the driver up-to-date for system wide performance improvments.
+We always recommend keeping the driver up-to-date for system wide performance improvements.
