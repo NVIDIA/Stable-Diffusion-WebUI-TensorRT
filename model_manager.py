@@ -71,19 +71,20 @@ class ModelManager:
                 for model_config in models:
                     if model_config["filepath"] not in trt_engines:
                         info(
-                            "Model config outdated. {} was not found".format(model_config["filepath"])
+                            "Model config outdated. {} was not found".format(
+                                model_config["filepath"]
+                            )
                         )
                         continue
                     tmp_config_list[model_config["filepath"]] = model_config
-                
-                tmp_config_list = list(tmp_config_list.values()) 
+
+                tmp_config_list = list(tmp_config_list.values())
                 if len(tmp_config_list) == 0:
                     self.all_models[cc].pop(base_model)
                 else:
                     self.all_models[cc][base_model] = models
 
         self.write_json()
-
 
     def __del__(self):
         self.update()
@@ -175,13 +176,36 @@ class ModelManager:
 
         return cache
 
-    def get_valid_models(self, base_model: str, feed_dict: dict):
+    def get_valid_models_from_dict(self, base_model: str, feed_dict: dict):
         valid_models = []
         distances = []
         idx = []
         models = self.available_models()
         for i, model in enumerate(models[base_model]):
-            valid, distance = model["config"].is_compatible(feed_dict)
+            valid, distance = model["config"].is_compatible_from_dict(feed_dict)
+            if valid:
+                valid_models.append(model)
+                distances.append(distance)
+                idx.append(i)
+
+        return valid_models, distances, idx
+
+    def get_valid_models(
+        self,
+        base_model: str,
+        width: int,
+        height: int,
+        batch_size: int,
+        max_embedding: int,
+    ):
+        valid_models = []
+        distances = []
+        idx = []
+        models = self.available_models()
+        for i, model in enumerate(models[base_model]):
+            valid, distance = model["config"].is_compatible(
+                width, height, batch_size, max_embedding
+            )
             if valid:
                 valid_models.append(model)
                 distances.append(distance)
@@ -201,7 +225,7 @@ class ModelConfig:
     vram: int
     unet_hidden_dim: int = 4
 
-    def is_compatible(self, feed_dict: dict):
+    def is_compatible_from_dict(self, feed_dict: dict):
         distance = 0
         for k, v in feed_dict.items():
             _min, _opt, _max = self.profile[k]
@@ -212,6 +236,38 @@ class ModelConfig:
             if torch.any(r_min < 0) or torch.any(r_max < 0):
                 return (False, distance)
             distance += r_opt.sum() + 0.5 * (r_max.sum() + 0.5 * r_min.sum())
+        return (True, distance)
+
+    def is_compatible(
+        self, width: int, height: int, batch_size: int, max_embedding: int
+    ):
+        distance = 0
+        sample = self.profile["sample"]
+        embedding = self.profile["encoder_hidden_states"]
+
+        batch_size *= 2
+        width = width // 8
+        height = height // 8
+
+        _min, _opt, _max = sample
+        if _min[0] > batch_size or _max[0] < batch_size:
+            return (False, distance)
+        if _min[2] > height or _max[2] < height:
+            return (False, distance)
+        if _min[3] > width or _max[3] < width:
+            return (False, distance)
+
+        _min_em, _opt_em, _max_em = embedding
+        if _min_em[1] > max_embedding or _max_em[1] < max_embedding:
+            return (False, distance)
+
+        distance = (
+            abs(_opt[0] - batch_size)
+            + abs(_opt[2] - height)
+            + abs(_opt[3] - width)
+            + 0.5 * (abs(_max[2] - height) + abs(_max[3] - width))
+        )
+
         return (True, distance)
 
 
