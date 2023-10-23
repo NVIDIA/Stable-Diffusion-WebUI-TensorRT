@@ -15,32 +15,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-
+import torch
+from torch.cuda import nvtx
 from collections import OrderedDict
 import numpy as np
 import onnx
 import onnx_graphsurgeon as gs
 from polygraphy.backend.common import bytes_from_path
 from polygraphy import util
-from polygraphy.backend.trt import CreateConfig, ModifyNetworkOutputs, Profile
+from polygraphy.backend.trt import ModifyNetworkOutputs, Profile
 from polygraphy.backend.trt import (
     engine_from_bytes,
     engine_from_network,
     network_from_onnx_path,
-    save_engine,
+    save_engine
 )
+from polygraphy.logger import G_LOGGER
 import tensorrt as trt
-import torch
-from torch.cuda import nvtx
 from enum import Enum, auto
 from safetensors.numpy import save_file, load_file
 from logging import error, warning
-import os
-import sys
 from tqdm import tqdm
 import copy 
 
 TRT_LOGGER = trt.Logger(trt.Logger.ERROR)
+G_LOGGER.module_severity = G_LOGGER.ERROR
 
 # Map of numpy dtype -> torch dtype
 numpy_to_torch_dtype_dict = {
@@ -389,15 +388,6 @@ class Engine:
             calib_profile = profile.fill_defaults(network[1]).to_trt(builder, network[1])
             config.add_optimization_profile(calib_profile)
 
-
-        # config = CreateConfig(
-        #     fp16=fp16,
-        #     refittable=enable_refit,
-        #     profiles=p,
-        #     load_timing_cache=timing_cache,
-        #     profiling_verbosity=trt.ProfilingVerbosity.DEFAULT,
-        #     **config_kwargs,
-        # )
         try:
             engine = engine_from_network(
                 network,
@@ -460,7 +450,6 @@ class Engine:
     def __str__(self):
         out = ""
         for opt_profile in range(self.engine.num_optimization_profiles):
-            out += f"Profile {opt_profile}:\n"
             for binding_idx in range(self.engine.num_bindings):
                 name = self.engine.get_binding_name(binding_idx)
                 shape = self.engine.get_profile_shape(opt_profile, name)

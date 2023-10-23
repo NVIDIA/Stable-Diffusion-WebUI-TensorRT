@@ -178,14 +178,16 @@ class ModelManager:
     def get_valid_models(self, base_model: str, feed_dict: dict):
         valid_models = []
         distances = []
+        idx = []
         models = self.available_models()
-        for model in models[base_model]:
+        for i, model in enumerate(models[base_model]):
             valid, distance = model["config"].is_compatible(feed_dict)
             if valid:
                 valid_models.append(model)
                 distances.append(distance)
+                idx.append(i)
 
-        return valid_models, distances
+        return valid_models, distances, idx
 
 
 @dataclass
