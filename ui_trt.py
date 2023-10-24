@@ -511,13 +511,13 @@ def get_version_from_filename(name):
 
 def get_lora_checkpoints():
     available_lora_models = {}
-    canditates = list(
+    candidates = list(
         shared.walk_files(
             shared.cmd_opts.lora_dir,
             allowed_extensions=[".pt", ".ckpt", ".safetensors"],
         )
     )
-    for filename in canditates:
+    for filename in candidates:
         name = os.path.splitext(os.path.basename(filename))[0]
         try:
             metadata = sd_models.read_metadata_from_safetensors(filename)

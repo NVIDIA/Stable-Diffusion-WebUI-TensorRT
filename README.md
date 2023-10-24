@@ -37,7 +37,7 @@ Each preset can be adjusted with the “Advanced Settings” option. More detail
 ### Common Issues/Limitations
 
 **HIRES FIX:** If using the hires.fix option in Automatic1111 you must build engines that match both the starting and ending resolutions. For instance, if initial size is `512 x 512` and hires.fix upscales to `1024 x 1024`, you must either generate two engines, one at 512 and one at 1024, or generate a single dynamic engine that covers the whole range.
-Having two seperate engines will heavily impact performance at the moment. Stay tuned for updates.
+Having two separate engines will heavily impact performance at the moment. Stay tuned for updates.
 
 **Resolution:** When generating images the resolution needs to be a multiple of 64. This applies to hires.fix as well, requiring the low and high-res to be divisible by 64.
 
@@ -55,4 +55,4 @@ Having two seperate engines will heavily impact performance at the moment. Stay 
 - Linux: >= 450.80.02
 - Windows: >=452.39
 
-We always recommend keeping the driver up-to-date for system wide performance improvments.
+We always recommend keeping the driver up-to-date for system wide performance improvements.
