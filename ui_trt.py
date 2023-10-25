@@ -601,7 +601,7 @@ def on_ui_tabs():
                             with gr.Column(elem_id="trt_height"):
                                 trt_height_min = gr.Slider(
                                     minimum=256,
-                                    maximum=2048,
+                                    maximum=4096,
                                     step=64,
                                     label="Min height",
                                     value=default_vals[3],
@@ -609,7 +609,7 @@ def on_ui_tabs():
                                 )
                                 trt_height_opt = gr.Slider(
                                     minimum=256,
-                                    maximum=2048,
+                                    maximum=4096,
                                     step=64,
                                     label="Optimal height",
                                     value=default_vals[4],
@@ -617,7 +617,7 @@ def on_ui_tabs():
                                 )
                                 trt_height_max = gr.Slider(
                                     minimum=256,
-                                    maximum=2048,
+                                    maximum=4096,
                                     step=64,
                                     label="Max height",
                                     value=default_vals[5],
@@ -627,7 +627,7 @@ def on_ui_tabs():
                             with gr.Column(elem_id="trt_width"):
                                 trt_width_min = gr.Slider(
                                     minimum=256,
-                                    maximum=2048,
+                                    maximum=4096,
                                     step=64,
                                     label="Min width",
                                     value=default_vals[6],
@@ -635,7 +635,7 @@ def on_ui_tabs():
                                 )
                                 trt_width_opt = gr.Slider(
                                     minimum=256,
-                                    maximum=2048,
+                                    maximum=4096,
                                     step=64,
                                     label="Optimal width",
                                     value=default_vals[7],
@@ -643,7 +643,7 @@ def on_ui_tabs():
                                 )
                                 trt_width_max = gr.Slider(
                                     minimum=256,
-                                    maximum=2048,
+                                    maximum=4096,
                                     step=64,
                                     label="Max width",
                                     value=default_vals[8],
