@@ -4,8 +4,11 @@ import onnx
 from logging import info, error
 import time
 import shutil
-
+import onnx_graphsurgeon as gs
+import numpy as np
+from safetensors.numpy import save_file
 from modules import sd_hijack, sd_unet, shared
+import gc
 
 from utilities import Engine
 import os
@@ -124,6 +127,8 @@ def export_onnx(
                 )
         info("ONNX export complete.")
         del onnx_opt_graph
+        del onnx_graph
+        gc.collect()
     except Exception as e:
         error(e)
         exit()
@@ -133,6 +138,50 @@ def export_onnx(
         setattr(F, "scaled_dot_product_attention", old_sdpa)
     shutil.rmtree(os.path.abspath("onnx_tmp"))
     del model
+
+
+def onnx_to_refit_delta(base_path: str, lora_path: str, out_path: str, eps: int = 1e-6):
+    base = gs.import_onnx(onnx.load(base_path)).toposort()
+    lora = gs.import_onnx(onnx.load(lora_path)).toposort()
+
+    def delta_to_map(refit_dict: dict, name: str, base: np.ndarray, lora: np.ndarray):
+        delta = lora - base
+        if np.sum(np.abs(delta)) > eps:
+            refit_dict[name] = delta
+
+    refit_dict = {}
+    for n_base, n_lora in zip(base.nodes, lora.nodes):
+        if n_base.op == "Constant":
+            name = n_base.outputs[0].name
+            print(f"Add Constant {name}\n")
+            try:
+                delta_to_map(
+                    refit_dict, name, n_base.outputs[0].values, n_lora.outputs[0].values
+                )
+            except:
+                pass
+
+        # Handle scale and bias weights
+        elif n_base.op == "Conv":
+            if n_base.inputs[1].__class__ == gs.Constant:
+                name = n_base.name + "_TRTKERNEL"
+                delta_to_map(refit_dict, name, n_base.inputs[1].values, n_lora.inputs[1].values)
+
+            if n_base.inputs[2].__class__ == gs.Constant:
+                name = n_base.name + "_TRTBIAS"
+                delta_to_map(refit_dict, name, n_base.inputs[2].values, n_lora.inputs[2].values)
+
+        # For all other nodes: find node inputs that are initializers (AKA gs.Constant)
+        else:
+            for inp1, inp2 in zip(n_base.inputs, n_lora.inputs):
+                name = inp1.name
+                if inp1.__class__ == gs.Constant:
+                    delta_to_map(refit_dict, name, inp1.values, inp2.values)
+    
+    del base
+    del lora
+    gc.collect()
+    save_file(refit_dict, out_path)
 
 
 def export_trt(trt_path, onnx_path, timing_cache, profile, use_fp16):

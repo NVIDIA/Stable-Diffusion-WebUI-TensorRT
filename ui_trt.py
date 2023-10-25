@@ -7,7 +7,7 @@ from modules.call_queue import wrap_gradio_gpu_call
 from modules.shared import cmd_opts
 from modules.ui_components import FormRow
 
-from exporter import export_onnx, export_trt
+from exporter import export_onnx, export_trt, onnx_to_refit_delta
 from utilities import PIPELINE_TYPE, Engine
 from models import make_OAIUNetXL, make_OAIUNet
 import logging
@@ -245,22 +245,15 @@ def export_lora_to_trt(lora_name, force_export):
 
     available_trt_unet = modelmanager.available_models()
     if len(available_trt_unet[base_name]) == 0:
-        return "## Please export the base model first."
-    trt_base_path = os.path.join(
-        TRT_MODEL_DIR, available_trt_unet[base_name][0]["filepath"]
-    )
-
+        return f"## Please export the base model ({base_name}) first."
+    
     if not os.path.exists(onnx_base_path):
-        return "## Please export the base model first."
+        return f"## Please export the base model ({base_name}) first."
 
     if not os.path.exists(trt_lora_path) or force_export:
-        print("No TensorRT engine found. Building...")
-        gr.Info("No TensorRT engine found. Building...")
-
-        engine = Engine(trt_base_path)
-        engine.load()
-        engine.refit(onnx_base_path, onnx_lora_path, dump_refit_path=trt_lora_path)
-        print("Built TensorRT engine.")
+        print("Saving to TensorRT format...")
+        gr.Info("Saving to TensorRT format...")
+        onnx_to_refit_delta(onnx_base_path, onnx_lora_path, trt_lora_path)
 
         modelmanager.add_lora_entry(
             base_name,
@@ -271,6 +264,7 @@ def export_lora_to_trt(lora_name, force_export):
             0,
             unet_hidden_dim,
         )
+
     return "## Exported Successfully \n"
 
 
@@ -509,7 +503,7 @@ def get_version_from_filename(name):
         return "Unknown"
 
 
-def get_lora_checkpoints():
+def get_lora_checkpoints(): #TODO
     available_lora_models = {}
     candidates = list(
         shared.walk_files(

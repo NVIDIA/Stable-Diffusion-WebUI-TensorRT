@@ -303,7 +303,6 @@ class Engine:
         refit_dict = load_file(
             dump_refit_path
         )  # TODO if deltas are used needs to be unpacked here
-
         refitter = trt.Refitter(self.engine, TRT_LOGGER)
         all_weights = refitter.get_all()
 
@@ -326,7 +325,33 @@ class Engine:
 
         if not refitter.refit_cuda_engine():
             print("Failed to refit!")
-            exit(0)
+            exit(0)        
+
+    def refit_from_dict(self, refit_dict):
+        refitter = trt.Refitter(self.engine, TRT_LOGGER)
+        all_weights = refitter.get_all()
+
+        # TODO ideally iterate over refit_dict as len(refit_dict) < len(all_weights)
+        for layer_name, weights_role in zip(all_weights[0], all_weights[1]):
+            if weights_role == trt.WeightsRole.KERNEL:
+                custom_name = layer_name + "_TRTKERNEL"
+            elif weights_role == trt.WeightsRole.BIAS:
+                custom_name = layer_name + "_TRTBIAS"
+            else:
+                custom_name = layer_name
+
+            # Skip refitting Trilu for now; scalar weights of type int64 value 1 - for clip model
+            if layer_name.startswith("onnx::Trilu"):
+                continue
+            
+            if custom_name in refit_dict:
+                refitter.set_weights(layer_name, weights_role, refit_dict[custom_name])
+            else:
+                print(f"[W] No refit weights for layer: {layer_name}")
+
+        if not refitter.refit_cuda_engine():
+            print("Failed to refit!")
+            exit(0)       
 
     def build(
         self,
