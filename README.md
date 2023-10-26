@@ -8,12 +8,12 @@ Supports Stable Diffusion 1.5 and 2.1. Native SDXL support coming in a future re
 
 ## Installation
 
-Example instructions for Automatic1111:
+Example instructions for Automatic1111:-
 
-1. Start the webui.bat
-2. Select the Extensions tab and click on Install from URL
-3. Copy the link to this repository and paste it into URL for extension's git repository
-4. Click Install
+1. Start the `webui.bat`.
+2. Select the Extensions tab and click on Install from the URL.
+3. Copy the link to this repository and paste it into the URL for the `extension's git repository`.
+4. Click `Install`.
 
 ## How to use
 
