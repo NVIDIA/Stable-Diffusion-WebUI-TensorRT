@@ -45,7 +45,7 @@ def export_onnx(
     modelobj=None,
     profile=None,
     opset=17,
-    diable_optimizations=False,
+    disable_optimizations=False,
     lora_path=None,
 ):
     swap_sdpa = hasattr(F, "scaled_dot_product_attention")
@@ -96,7 +96,7 @@ def export_onnx(
         info("Optimize ONNX.")
 
         onnx_graph = onnx.load(tmp_path)
-        if diable_optimizations:
+        if disable_optimizations:
             onnx_opt_graph = onnx_graph
         else:
             onnx_opt_graph = modelobj.optimize(onnx_graph)

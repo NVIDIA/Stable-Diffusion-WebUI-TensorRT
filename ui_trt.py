@@ -101,7 +101,7 @@ def export_unet_to_trt(
         modelobj = make_OAIUNetXL(
             version, pipeline, "cuda", False, batch_max, opt_textlen, max_textlen
         )
-        diable_optimizations = True
+        disable_optimizations = True
     else:
         modelobj = make_OAIUNet(
             version,
@@ -113,7 +113,7 @@ def export_unet_to_trt(
             max_textlen,
             controlnet,
         )
-        diable_optimizations = False
+        disable_optimizations = False
 
     profile = modelobj.get_input_profile(
         batch_min,
@@ -136,7 +136,7 @@ def export_unet_to_trt(
             onnx_path,
             modelobj,
             profile=profile,
-            diable_optimizations=diable_optimizations,
+            disable_optimizations=disable_optimizations,
         )
         print("Exported to ONNX.")
 
@@ -212,7 +212,7 @@ def export_lora_to_trt(lora_name, force_export):
     if shared.sd_model.is_sdxl:
         pipeline = PIPELINE_TYPE.SD_XL_BASE
         modelobj = make_OAIUNetXL(version, pipeline, "cuda", False, 1, 77, 77)
-        diable_optimizations = True
+        disable_optimizations = True
     else:
         modelobj = make_OAIUNet(
             version,
@@ -224,7 +224,7 @@ def export_lora_to_trt(lora_name, force_export):
             77,
             None,
         )
-        diable_optimizations = False
+        disable_optimizations = False
 
     if not os.path.exists(onnx_lora_path):
         print("No ONNX file found. Exporting ONNX...")
@@ -235,7 +235,7 @@ def export_lora_to_trt(lora_name, force_export):
             profile=modelobj.get_input_profile(
                 1, 1, 1, 512, 512, 512, 512, 512, 512, True
             ),
-            diable_optimizations=diable_optimizations,
+            disable_optimizations=disable_optimizations,
             lora_path=lora_model["filename"],
         )
         print("Exported to ONNX.")
@@ -403,7 +403,7 @@ def get_settings_from_version(version):
     return *profile_presets[version], static
 
 
-def diable_export(version):
+def disable_export(version):
     if version == "Default":
         return gr.update(visible=False), gr.update(visible=True), gr.update(visible=False)
     else:
@@ -415,7 +415,7 @@ def disable_lora_export(lora):
     else:
         return gr.update(visible=True)
 
-def diable_visibility(hide):
+def disable_visibility(hide):
     num_outputs = 8
     out = [gr.update(visible=not hide) for _ in range(num_outputs)]
     return out
@@ -511,13 +511,13 @@ def get_version_from_filename(name):
 
 def get_lora_checkpoints():
     available_lora_models = {}
-    canditates = list(
+    candidates = list(
         shared.walk_files(
             shared.cmd_opts.lora_dir,
             allowed_extensions=[".pt", ".ckpt", ".safetensors"],
         )
     )
-    for filename in canditates:
+    for filename in candidates:
         name = os.path.splitext(os.path.basename(filename))[0]
         try:
             metadata = sd_models.read_metadata_from_safetensors(filename)
@@ -719,13 +719,13 @@ def on_ui_tabs():
                             ],
                         )
                         version.change(
-                            diable_export,
+                            disable_export,
                             version,
                             [button_export_unet, button_export_default_unet, advanced_settings],
                         )
 
                         static_shapes.change(
-                            diable_visibility,
+                            disable_visibility,
                             static_shapes,
                             [
                                 trt_min_batch,
