@@ -9,7 +9,7 @@ from modules.ui_components import FormRow
 
 from exporter import export_onnx, export_trt, onnx_to_refit_delta
 from utilities import PIPELINE_TYPE, Engine
-from models import make_OAIUNetXL, make_OAIUNet
+from models_helper import make_OAIUNetXL, make_OAIUNet
 import logging
 import gc
 import torch
