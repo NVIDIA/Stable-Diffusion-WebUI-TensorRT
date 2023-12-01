@@ -810,6 +810,7 @@ class OAIUNet(BaseModel):
         verbose=True,
         fp16=False,
         max_batch_size=16,
+        text_minlen=77,
         text_maxlen=77,
         text_optlen=77,
         unet_dim=4,
@@ -828,6 +829,7 @@ class OAIUNet(BaseModel):
         )
         self.unet_dim = unet_dim
         self.controlnet = controlnet
+        self.text_minlen = text_minlen
         self.text_optlen = text_optlen
 
     def get_input_names(self):
@@ -896,7 +898,7 @@ class OAIUNet(BaseModel):
                 ],
                 "timesteps": [(min_batch,), (opt_batch,), (max_batch,)],
                 "encoder_hidden_states": [
-                    (min_batch, self.text_optlen, self.embedding_dim),
+                    (min_batch, self.text_minlen, self.embedding_dim),
                     (opt_batch, self.text_optlen, self.embedding_dim),
                     (max_batch, self.text_maxlen, self.embedding_dim),
                 ],
@@ -1034,6 +1036,7 @@ def make_OAIUNet(
     device,
     verbose,
     max_batch_size,
+    text_minlen,
     text_optlen,
     text_maxlen,
     controlnet=None,
@@ -1045,6 +1048,7 @@ def make_OAIUNet(
         device=device,
         verbose=verbose,
         max_batch_size=max_batch_size,
+        text_minlen=text_minlen,
         text_optlen=text_optlen,
         text_maxlen=text_maxlen,
         unet_dim=(9 if pipeline.is_inpaint() else 4),

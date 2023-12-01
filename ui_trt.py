@@ -109,6 +109,7 @@ def export_unet_to_trt(
             "cuda",
             False,
             batch_max,
+            min_textlen,
             opt_textlen,
             max_textlen,
             controlnet,
