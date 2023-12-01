@@ -317,7 +317,7 @@ class BaseModel:
             return (opt_batch, opt_batch, opt_batch)
         elif self.text_maxlen > 77 and not static_batch:
             if self.text_optlen > 77:
-                return (min_batch, opt_batch, max_batch * 2)
+                return (min_batch, opt_batch * 2, max_batch * 2)
             return (min_batch, opt_batch * 2, max_batch * 2)
         else:
             raise Exception("Uncovered case in get_batch_dim")
