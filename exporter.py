@@ -7,20 +7,21 @@ import shutil
 import onnx_graphsurgeon as gs
 import numpy as np
 from safetensors.numpy import save_file
-from modules import sd_hijack, sd_unet, shared
+from modules import shared
 import gc
 
 from utilities import Engine
+from models_helper import UNetModelSplit
 import os
+from pathlib import Path
+from optimum.onnx.utils import (
+    _get_onnx_external_data_tensors,
+    check_model_uses_external_data,
+)
+from datastructures import ProfileSettings
 
 
-def get_cc():
-    cc_major = torch.cuda.get_device_properties(0).major
-    cc_minor = torch.cuda.get_device_properties(0).minor
-    return cc_major, cc_minor
-
-
-def apply_lora(model, lora_path, inputs):
+def apply_lora(model, lora_name, inputs):
     try:
         import sys
 
@@ -34,18 +35,97 @@ def apply_lora(model, lora_path, inputs):
         error(e)
         error("LoRA not found. Please install LoRA extension first from ...")
     model.forward(*inputs)
-    lora_name = os.path.splitext(os.path.basename(lora_path))[0]
-    networks.load_networks(
-        [lora_name], [1.0], [1.0], [None]
-    )  # todo: UI for parameters, multiple loras -> Struct of Arrays?
+    networks.load_networks([lora_name], [1.0], [1.0], [None])
 
     model.forward(*inputs)
     return model
 
 
+def lora_from_pt(pytorch_model_sd: dict, onnx_path: str, delta: bool, prefix="unet"):
+    def convert_int64(arr):
+        if len(arr.shape) == 0:
+            return np.array([np.int32(arr)])
+        return arr
+
+    def add_to_map(
+        refit_dict, onnx_array, torch_array, delta, eps=1e-6
+    ):  # Shoud be sufficient since fp16 only goes to 6e-5
+        assert onnx_array.name not in refit_dict
+
+        if torch_array.dtype == np.int64:
+            torch_array = convert_int64(torch_array)
+
+        if torch_array.shape != onnx_array.values.shape:
+            torch_array = torch_array.transpose()
+            assert torch_array.shape == onnx_array.values.shape
+
+        if delta:
+            assert torch_array.dtype == onnx_array.values.dtype
+            torch_array = torch_array - onnx_array.values
+        if torch_array.sum() < eps:
+            return
+        refit_dict[onnx_array.name] = torch_array
+
+    print(f"Refitting TensorRT engine with LoRA weights")
+
+    # Construct mapping from weight names in original ONNX model -> LoRA fused PyTorch model
+    nodes = gs.import_onnx(onnx.load(onnx_path)).toposort().nodes
+
+    refit_dict = {}
+    lora_keywords = ["to_q", "to_k", "to_v", "to_out"]
+    for node in nodes:
+        for kw in lora_keywords:
+            if kw in node.name and "MatMul" in node.name:
+                for inp in node.inputs:
+                    if inp.__class__ == gs.Constant:
+                        onnx_node_name = node.name
+                        pt_weight_name = onnx_node_name.replace(f"/{kw}/{kw}", f"/{kw}")
+                        pt_weight_name = ".".join(
+                            [prefix, *pt_weight_name.split("/")[2:]]
+                        )
+                        pt_weight_name = pt_weight_name.replace("MatMul", "weight")
+
+                        # assert pt_weight_name in pytorch_model_sd
+                        if pt_weight_name not in pytorch_model_sd:
+                            print(
+                                f"Warning: {pt_weight_name} not found in PyTorch model"
+                            )
+                        add_to_map(
+                            refit_dict,
+                            inp,
+                            pytorch_model_sd[pt_weight_name].cpu().detach().numpy(),
+                            delta=delta,
+                        )
+
+    return refit_dict
+
+
+def export_lora(
+    modelobj: UNetModelSplit, onnx_path: str, lora_name: str, profile: ProfileSettings
+):
+    inputs = modelobj.get_encoder_sample_input(
+        profile.bs_opt * 2, profile.h_opt // 8, profile.w_opt // 8, profile.t_min
+    )
+    with torch.inference_mode(), torch.autocast("cuda"):
+        modelobj.unet = apply_lora(modelobj.unet, lora_name, inputs)
+
+    encoder_refit = lora_from_pt(
+        modelobj.encoder.state_dict(),
+        os.path.join(onnx_path, "encoder.onnx"),
+        delta=True,
+    )
+    decoder_refit = lora_from_pt(
+        modelobj.decoder.state_dict(),
+        os.path.join(onnx_path, "decoder.onnx"),
+        delta=True,
+    )
+
+    return encoder_refit, decoder_refit
+
+
 def export_onnx(
-    onnx_path,
-    modelobj=None,
+    onnx_path: str,
+    modelobj: UNetModelSplit = None,
     profile=None,
     opset=17,
     diable_optimizations=False,
@@ -56,34 +136,56 @@ def export_onnx(
     if swap_sdpa:
         delattr(F, "scaled_dot_product_attention")
 
-    def disable_checkpoint(self):
-        if getattr(self, "use_checkpoint", False) == True:
-            self.use_checkpoint = False
-        if getattr(self, "checkpoint", False) == True:
-            self.checkpoint = False
+    info("Exporting to ONNX...")
+    inputs = modelobj.get_encoder_sample_input(
+        profile["sample"][1][0],
+        profile["sample"][1][-2],
+        profile["sample"][1][-1],
+        profile["encoder_hidden_states"][1][1],
+    )
 
-    shared.sd_model.model.diffusion_model.apply(disable_checkpoint)
-    is_xl = shared.sd_model.is_sdxl
+    if not os.path.exists(os.path.join(onnx_path, "encoder.onnx")):
+        _export_onnx(
+            modelobj.encoder,
+            inputs,
+            Path(os.path.join(onnx_path, "encoder.onnx")),
+            opset,
+            modelobj.get_encoder_input_names(),
+            modelobj.get_encoder_output_names(),
+            modelobj.get_encoder_dynamic_axes(),
+            modelobj.optimize if not diable_optimizations else None,
+        )
 
-    sd_unet.apply_unet("None")
-    sd_hijack.model_hijack.apply_optimizations("None")
+    inputs = modelobj.get_decoder_sample_input(
+        profile["sample"][1][0],
+        profile["sample"][1][-2],
+        profile["sample"][1][-1],
+        profile["encoder_hidden_states"][1][1],
+    )
+    if not os.path.exists(os.path.join(onnx_path, "decoder.onnx")):
+        _export_onnx(
+            modelobj.decoder,
+            inputs,
+            Path(os.path.join(onnx_path, "decoder.onnx")),
+            opset,
+            modelobj.get_decoder_input_names(),
+            modelobj.get_decoder_output_names(),
+            modelobj.get_decoder_dynamic_axes(),
+            modelobj.optimize if not diable_optimizations else None,
+        )
+    # CleanUp
+    if swap_sdpa and old_sdpa:
+        setattr(F, "scaled_dot_product_attention", old_sdpa)
 
-    os.makedirs("onnx_tmp", exist_ok=True)
-    tmp_path = os.path.abspath(os.path.join("onnx_tmp", "tmp.onnx"))
 
+def _export_onnx(
+    model, inputs, path, opset, in_names, out_names, dyn_axes, optimizer=None
+):
+    os.makedirs(os.path.abspath("onnx_tmp"), exist_ok=True)
+    tmp_path = os.path.abspath(os.path.join("onnx_tmp", "model.onnx"))
     try:
         info("Exporting to ONNX...")
         with torch.inference_mode(), torch.autocast("cuda"):
-            inputs = modelobj.get_sample_input(
-                profile["sample"][1][0] // 2,
-                profile["sample"][1][-2] * 8,
-                profile["sample"][1][-1] * 8,
-            )
-            model = shared.sd_model.model.diffusion_model
-
-            if lora_path:
-                model = apply_lora(model, lora_path, inputs)
-
             torch.onnx.export(
                 model,
                 inputs,
@@ -91,97 +193,40 @@ def export_onnx(
                 export_params=True,
                 opset_version=opset,
                 do_constant_folding=True,
-                input_names=modelobj.get_input_names(),
-                output_names=modelobj.get_output_names(),
-                dynamic_axes=modelobj.get_dynamic_axes(),
+                input_names=in_names,
+                output_names=out_names,
+                dynamic_axes=dyn_axes,
             )
-
-        info("Optimize ONNX.")
-
-        onnx_graph = onnx.load(tmp_path)
-        if diable_optimizations:
-            onnx_opt_graph = onnx_graph
-        else:
-            onnx_opt_graph = modelobj.optimize(onnx_graph)
-
-        if onnx_opt_graph.ByteSize() > 2147483648 or is_xl:
-            onnx.save_model(
-                onnx_opt_graph,
-                onnx_path,
-                save_as_external_data=True,
-                all_tensors_to_one_file=True,
-                convert_attribute=False,
-            )
-        else:
-            try:
-                onnx.save(onnx_opt_graph, onnx_path)
-            except Exception as e:
-                error(e)
-                error("ONNX file too large. Saving as external data.")
-                onnx.save_model(
-                    onnx_opt_graph,
-                    onnx_path,
-                    save_as_external_data=True,
-                    all_tensors_to_one_file=True,
-                    convert_attribute=False,
-                )
-        info("ONNX export complete.")
-        del onnx_opt_graph
-        del onnx_graph
-        gc.collect()
     except Exception as e:
-        error(e)
-        exit()
+        error("Exporting to ONNX failed. {}".format(e))
+        return
 
-    # CleanUp
-    if swap_sdpa and old_sdpa:
-        setattr(F, "scaled_dot_product_attention", old_sdpa)
-    shutil.rmtree(os.path.abspath("onnx_tmp"))
-    del model
+    info("Optimize ONNX.")
+    os.makedirs(path.parent, exist_ok=True)
+    onnx_model = onnx.load(tmp_path, load_external_data=False)
+    model_uses_external_data = check_model_uses_external_data(onnx_model)
 
+    if model_uses_external_data:
+        info("ONNX model uses external data. Saving as external data.")
+        tensors_paths = _get_onnx_external_data_tensors(onnx_model)
+        onnx_model = onnx.load(tmp_path, load_external_data=True)
+        onnx.save(
+            onnx_model,
+            str(path),
+            save_as_external_data=True,
+            all_tensors_to_one_file=True,
+            location=path.name + "_data",
+            size_threshold=1024,
+        )
+        shutil.rmtree(os.path.abspath("onnx_tmp"))
 
-def onnx_to_refit_delta(base_path: str, lora_path: str, out_path: str, eps: int = 1e-6):
-    base = gs.import_onnx(onnx.load(base_path)).toposort()
-    lora = gs.import_onnx(onnx.load(lora_path)).toposort()
-
-    def delta_to_map(refit_dict: dict, name: str, base: np.ndarray, lora: np.ndarray):
-        delta = lora - base
-        if np.sum(np.abs(delta)) > eps:
-            refit_dict[name] = delta
-
-    refit_dict = {}
-    for n_base, n_lora in zip(base.nodes, lora.nodes):
-        if n_base.op == "Constant":
-            name = n_base.outputs[0].name
-            print(f"Add Constant {name}\n")
-            try:
-                delta_to_map(
-                    refit_dict, name, n_base.outputs[0].values, n_lora.outputs[0].values
-                )
-            except:
-                pass
-
-        # Handle scale and bias weights
-        elif n_base.op == "Conv":
-            if n_base.inputs[1].__class__ == gs.Constant:
-                name = n_base.name + "_TRTKERNEL"
-                delta_to_map(refit_dict, name, n_base.inputs[1].values, n_lora.inputs[1].values)
-
-            if n_base.inputs[2].__class__ == gs.Constant:
-                name = n_base.name + "_TRTBIAS"
-                delta_to_map(refit_dict, name, n_base.inputs[2].values, n_lora.inputs[2].values)
-
-        # For all other nodes: find node inputs that are initializers (AKA gs.Constant)
-        else:
-            for inp1, inp2 in zip(n_base.inputs, n_lora.inputs):
-                name = inp1.name
-                if inp1.__class__ == gs.Constant:
-                    delta_to_map(refit_dict, name, inp1.values, inp2.values)
-    
-    del base
-    del lora
-    gc.collect()
-    save_file(refit_dict, out_path)
+    if optimizer is not None:
+        try:
+            onnx_opt_graph = optimizer("encoder", onnx_model)
+            onnx.save(onnx_opt_graph, path)
+        except Exception as e:
+            error("Optimizing ONNX failed. {}".format(e))
+            return
 
 
 def export_trt(trt_path, onnx_path, timing_cache, profile, use_fp16):
@@ -203,6 +248,7 @@ def export_trt(trt_path, onnx_path, timing_cache, profile, use_fp16):
     )
     e = time.time()
     info(f"Time taken to build: {(e-s)}s")
+    del engine
 
     shared.sd_model = model.cuda()
     return ret

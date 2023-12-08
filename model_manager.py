@@ -5,164 +5,86 @@ import os
 from logging import info, warning
 from dataclasses import dataclass
 import torch
-from exporter import get_cc
 from modules import paths_internal
+from copy import copy
+from datastructures import ModelType
 
 ONNX_MODEL_DIR = os.path.join(paths_internal.models_path, "Unet-onnx")
 if not os.path.exists(ONNX_MODEL_DIR):
     os.makedirs(ONNX_MODEL_DIR)
+
 TRT_MODEL_DIR = os.path.join(paths_internal.models_path, "Unet-trt")
 if not os.path.exists(TRT_MODEL_DIR):
     os.makedirs(TRT_MODEL_DIR)
-LORA_MODEL_DIR = os.path.join(paths_internal.models_path, "Lora")
-NVIDIA_CACHE_URL = ""
 
-MODEL_FILE = os.path.join(TRT_MODEL_DIR, "model.json")
+CNET_MODEL_PATH = os.path.join(paths_internal.models_path, "ControlNet")
+if not os.path.exists(CNET_MODEL_PATH):
+    os.makedirs(CNET_MODEL_PATH)
+
+def get_cc():
+    cc_major = torch.cuda.get_device_properties(0).major
+    cc_minor = torch.cuda.get_device_properties(0).minor
+    return cc_major, cc_minor
 
 cc_major, cc_minor = get_cc()
 
 
 class ModelManager:
-    def __init__(self, model_file=MODEL_FILE) -> None:
+    def __init__(self) -> None:
         self.all_models = {}
-        self.model_file = model_file
+        self.model_files = []
         self.cc = "cc{}{}".format(cc_major, cc_minor)
-        if not os.path.exists(model_file):
-            warning("Model file does not exist. Creating new one.")
-        else:
-            self.all_models = self.read_json()
 
-        self.update()
+        for cc in os.listdir(TRT_MODEL_DIR):
+            cc_dir = os.path.join(TRT_MODEL_DIR, cc)
+            if not os.path.isdir(cc_dir):
+                continue
+            for model_type in os.listdir(cc_dir):
+                arch_dir = os.path.join(cc_dir, model_type)
+                for model_name in os.listdir(arch_dir):
+                    model_dir = os.path.join(arch_dir, model_name)
+                    if not os.path.isdir(model_dir):
+                        continue
+                    for profile_hash in os.listdir(model_dir):
+                        profile_dir = os.path.join(model_dir, profile_hash)
+                        if not os.path.isdir(profile_dir):
+                            continue
+                        model_file = os.path.join(profile_dir, "model.json")
+                        if not os.path.exists(model_file):
+                            warning("Model file does not exist at {}... This might cause issues.".format(profile_dir))
+                            continue
+                        self.model_files.append(model_file)
+                        config = self.read_json(model_file)
+                        self.all_models.setdefault(cc, {}).setdefault(model_type, {}).setdefault(model_name, []).append(
+                            {"config": config, "filepath": profile_dir}
+                        )
 
     @staticmethod
-    def get_onnx_path(model_name, model_hash):
-        onnx_filename = "_".join([model_name, model_hash]) + ".onnx"
+    def get_onnx_path(model_name: str):
+        onnx_filename = model_name + ".onnx"
         onnx_path = os.path.join(ONNX_MODEL_DIR, onnx_filename)
         return onnx_filename, onnx_path
-
-    def get_trt_path(self, model_name, model_hash, profile, static_shape):
+    
+    def get_trt_path(self, model_name: str, profile: dict, static_shape: bool, model_type: ModelType):
+        hash_dims = ["sample", "encoder_hidden_states"]
         profile_hash = []
         n_profiles = 1 if static_shape else 3
+        dim_hash = ""
         for k, v in profile.items():
-            dim_hash = []
+            if k not in hash_dims:
+                continue
             for i in range(n_profiles):
-                dim_hash.append("x".join([str(x) for x in v[i]]))
-            profile_hash.append(k + "=" + "+".join(dim_hash))
+                dim_hash += "".join([str(x) for x in v[i]])
 
-        profile_hash = "-".join(profile_hash)
-        trt_filename = (
-            "_".join([model_name, model_hash, self.cc, profile_hash]) + ".trt"
-        )
-        trt_path = os.path.join(TRT_MODEL_DIR, trt_filename)
+        if model_type == ModelType.LORA:
+            dim_hash = "RefitDict"
+        else:
+            dim_hash = str(hex(int(dim_hash))[2:])
 
-        return trt_filename, trt_path
+        profile_hash = "id" + dim_hash
+        trt_path = os.path.join(TRT_MODEL_DIR, self.cc, str(model_type), model_name, profile_hash)
 
-    def update(self):
-        trt_engines = [
-            trt_file
-            for trt_file in os.listdir(TRT_MODEL_DIR)
-            if trt_file.endswith(".trt")
-        ]
-
-        tmp_all_models = self.all_models.copy()
-        for cc, base_models in tmp_all_models.items():
-            for base_model, models in base_models.items():
-                tmp_config_list = {}
-                for model_config in models:
-                    if model_config["filepath"] not in trt_engines:
-                        info(
-                            "Model config outdated. {} was not found".format(
-                                model_config["filepath"]
-                            )
-                        )
-                        continue
-                    tmp_config_list[model_config["filepath"]] = model_config
-
-                tmp_config_list = list(tmp_config_list.values())
-                if len(tmp_config_list) == 0:
-                    self.all_models[cc].pop(base_model)
-                else:
-                    self.all_models[cc][base_model] = models
-
-        self.write_json()
-
-    def __del__(self):
-        self.update()
-
-    def add_entry(
-        self,
-        model_name,
-        model_hash,
-        profile,
-        static_shapes,
-        fp32,
-        inpaint,
-        refit,
-        vram,
-        unet_hidden_dim,
-        lora,
-    ):
-        config = ModelConfig(
-            profile, static_shapes, fp32, inpaint, refit, lora, vram, unet_hidden_dim
-        )
-        trt_name, trt_path = self.get_trt_path(
-            model_name, model_hash, profile, static_shapes
-        )
-
-        base_model_name = f"{model_name}"  # _{model_hash}
-        if self.cc not in self.all_models:
-            self.all_models[self.cc] = {}
-
-        if base_model_name not in self.all_models[self.cc]:
-            self.all_models[self.cc][base_model_name] = []
-        self.all_models[self.cc][base_model_name].append(
-            {
-                "filepath": trt_name,
-                "config": config,
-            }
-        )
-
-        self.write_json()
-
-    def add_lora_entry(
-        self, base_model, lora_name, trt_lora_path, fp32, inpaint, vram, unet_hidden_dim
-    ):
-        config = ModelConfig(
-            [[], [], []], False, fp32, inpaint, True, True, vram, unet_hidden_dim
-        )
-
-        self.all_models[self.cc][lora_name] = [
-            {
-                "filepath": trt_lora_path,
-                "base_model": base_model,
-                "config": config,
-            }
-        ]
-
-        self.write_json()
-
-    def write_json(self):
-        with open(self.model_file, "w") as f:
-            json.dump(self.all_models, f, indent=4, cls=ModelConfigEncoder)
-
-    def read_json(self, encode_config=True):
-        with open(self.model_file, "r") as f:
-            out = json.load(f)
-
-        if not encode_config:
-            return out
-
-        for cc, models in out.items():
-            for base_model, configs in models.items():
-                for i in range(len(configs)):
-                    out[cc][base_model][i]["config"] = ModelConfig(
-                        **configs[i]["config"]
-                    )
-        return out
-
-    def available_models(self):
-        available = self.all_models.get(self.cc, {})
-        return available
+        return profile_hash, trt_path
 
     def get_timing_cache(self):
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -175,12 +97,56 @@ class ModelManager:
         )
 
         return cache
+    
+    def add_entry(
+        self,
+        model_name: str,
+        profile: dict,
+        static_shapes: bool,
+        fp32: bool,
+        refit: bool,
+        vram: int,
+        model_type: ModelType,
+    ):
+        config = ModelConfig(
+            profile, static_shapes, fp32, refit, model_type, vram
+        )
+        trt_name, trt_path = self.get_trt_path(
+            model_name, profile, static_shapes, model_type
+        )
 
-    def get_valid_models_from_dict(self, base_model: str, feed_dict: dict):
+        self.write_json(os.path.join(trt_path, "model.json"), config)
+
+        if self.cc not in self.all_models:
+            self.all_models[self.cc] = {}
+
+        if model_type not in self.all_models[self.cc]:
+            self.all_models[self.cc][model_type] = {}
+
+        if model_name not in self.all_models[self.cc][model_type]:
+            self.all_models[self.cc][model_type][model_name] = []
+        self.all_models[self.cc][model_type][model_name].append(
+            {
+                "filepath": trt_path,
+                "config": config,
+            }
+        )
+
+    def get_available_models(self, model_type: ModelType):
+        available = self.all_models.get(self.cc, {})
+        if model_type == ModelType.UNDEFINED:
+            out = {}
+            for mtype in ModelType:
+                out.update(available.get(str(mtype), {}))
+            return out
+        else:
+            return available.get(str(model_type), {})
+    
+    def get_valid_models_from_dict(self, base_model: str, feed_dict: dict, model_type: ModelType):
         valid_models = []
         distances = []
         idx = []
-        models = self.available_models()
+        models = self.get_available_models(model_type)
         for i, model in enumerate(models[base_model]):
             valid, distance = model["config"].is_compatible_from_dict(feed_dict)
             if valid:
@@ -197,11 +163,12 @@ class ModelManager:
         height: int,
         batch_size: int,
         max_embedding: int,
+        model_type: ModelType,
     ):
         valid_models = []
         distances = []
         idx = []
-        models = self.available_models()
+        models = self.get_available_models(model_type)
         for i, model in enumerate(models[base_model]):
             valid, distance = model["config"].is_compatible(
                 width, height, batch_size, max_embedding
@@ -213,17 +180,37 @@ class ModelManager:
 
         return valid_models, distances, idx
 
+    def write_json(self, model_file, config):
+        with open(model_file, "w") as f:
+            json.dump(config, f, indent=4, cls=ModelConfigEncoder)
 
+    def read_json(self, model_file, encode_config=True):
+        with open(model_file, "r") as f:
+            out = json.load(f)
+
+        if not encode_config:
+            return out
+
+        return ModelConfig(**out)
+    
 @dataclass
 class ModelConfig:
     profile: dict
     static_shapes: bool
     fp32: bool
-    inpaint: bool
     refit: bool
-    lora: bool
+    model_type: ModelType
     vram: int
-    unet_hidden_dim: int = 4
+
+    def __dict__(self):
+        return {
+            "profile": self.profile,
+            "static_shapes": self.static_shapes,
+            "fp32": self.fp32,
+            "refit": self.refit,
+            "model_type": str(self.model_type),
+            "vram": self.vram,
+        }
 
     def is_compatible_from_dict(self, feed_dict: dict):
         distance = 0
@@ -273,7 +260,7 @@ class ModelConfig:
 
 class ModelConfigEncoder(JSONEncoder):
     def default(self, o: ModelConfig):
-        return o.__dict__
+        return o.__dict__()
 
 
 modelmanager = ModelManager()

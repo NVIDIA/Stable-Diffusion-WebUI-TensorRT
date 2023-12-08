@@ -32,11 +32,29 @@ from polygraphy.backend.trt import (
 )
 from polygraphy.logger import G_LOGGER
 import tensorrt as trt
-from enum import Enum, auto
-from safetensors.numpy import save_file, load_file
 from logging import error, warning
 from tqdm import tqdm
 import copy 
+
+class Registry(dict):
+    def __init__(self, name: str, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.name = name
+
+    def __str__(self):
+        return self.name
+
+    def choices(self):
+        return list(self.keys())
+
+    def register(self, name: str):
+        def decorator(fn, fn_name=name):
+            self[name] = fn
+            return fn
+
+        self[name] = decorator
+        return self[name]
+
 
 TRT_LOGGER = trt.Logger(trt.Logger.ERROR)
 G_LOGGER.module_severity = G_LOGGER.ERROR
@@ -63,33 +81,6 @@ else:
 torch_to_numpy_dtype_dict = {
     value: key for (key, value) in numpy_to_torch_dtype_dict.items()
 }
-
-
-class PIPELINE_TYPE(Enum):
-    TXT2IMG = auto()
-    IMG2IMG = auto()
-    INPAINT = auto()
-    SD_XL_BASE = auto()
-    SD_XL_REFINER = auto()
-
-    def is_txt2img(self):
-        return self == self.TXT2IMG
-
-    def is_img2img(self):
-        return self == self.IMG2IMG
-
-    def is_inpaint(self):
-        return self == self.INPAINT
-
-    def is_sd_xl_base(self):
-        return self == self.SD_XL_BASE
-
-    def is_sd_xl_refiner(self):
-        return self == self.SD_XL_REFINER
-
-    def is_sd_xl(self):
-        return self.is_sd_xl_base() or self.is_sd_xl_refiner()
-
 
 class TQDMProgressMonitor(trt.IProgressMonitor):
     def __init__(self):
@@ -172,6 +163,8 @@ class Engine:
         self.context = None
         self.buffers = OrderedDict()
         self.tensors = OrderedDict()
+        self.inputs = {}
+        self.outputs = {}
         self.cuda_graph_instance = None  # cuda graph
 
     def __del__(self):
@@ -180,178 +173,36 @@ class Engine:
         del self.buffers
         del self.tensors
 
-    def refit(self, onnx_path, onnx_refit_path, dump_refit_path=None):
-        def convert_int64(arr):
-            # TODO: smarter conversion
-            if len(arr.shape) == 0:
-                return np.int32(arr)
-            return arr
+    def reset(self, engine_path=None):
+        del self.engine
+        del self.context
+        del self.buffers
+        del self.tensors
+        self.engine_path = engine_path
 
-        def add_to_map(refit_dict, name, values):
-            if name in refit_dict:
-                assert refit_dict[name] is None
-                if values.dtype == np.int64:
-                    values = convert_int64(values)
-                refit_dict[name] = values
+        self.buffers = OrderedDict()
+        self.tensors = OrderedDict()
+        self.inputs = {}
+        self.outputs = {}
 
-        print(f"Refitting TensorRT engine with {onnx_refit_path} weights")
-        refit_nodes = gs.import_onnx(onnx.load(onnx_refit_path)).toposort().nodes
-
-        # Construct mapping from weight names in refit model -> original model
-        name_map = {}
-        for n, node in enumerate(gs.import_onnx(onnx.load(onnx_path)).toposort().nodes):
-            refit_node = refit_nodes[n]
-            assert node.op == refit_node.op
-            # Constant nodes in ONNX do not have inputs but have a constant output
-            if node.op == "Constant":
-                name_map[refit_node.outputs[0].name] = node.outputs[0].name
-            # Handle scale and bias weights
-            elif node.op == "Conv":
-                if node.inputs[1].__class__ == gs.Constant:
-                    name_map[refit_node.name + "_TRTKERNEL"] = node.name + "_TRTKERNEL"
-                if node.inputs[2].__class__ == gs.Constant:
-                    name_map[refit_node.name + "_TRTBIAS"] = node.name + "_TRTBIAS"
-            # For all other nodes: find node inputs that are initializers (gs.Constant)
-            else:
-                for i, inp in enumerate(node.inputs):
-                    if inp.__class__ == gs.Constant:
-                        name_map[refit_node.inputs[i].name] = inp.name
-
-        def map_name(name):
-            if name in name_map:
-                return name_map[name]
-            return name
-
-        # Construct refit dictionary
-        refit_dict = {}
+    def refit_from_dict(self, refit_dict):
+        # Initialize refitter
         refitter = trt.Refitter(self.engine, TRT_LOGGER)
         all_weights = refitter.get_all()
-        for layer_name, role in zip(all_weights[0], all_weights[1]):
-            # for specialized roles, use a unique name in the map:
-            if role == trt.WeightsRole.KERNEL:
-                name = layer_name + "_TRTKERNEL"
-            elif role == trt.WeightsRole.BIAS:
-                name = layer_name + "_TRTBIAS"
-            else:
-                name = layer_name
+        assert len(all_weights)
 
-            assert name not in refit_dict, "Found duplicate layer: " + name
-            refit_dict[name] = None
-
-        for n in refit_nodes:
-            # Constant nodes in ONNX do not have inputs but have a constant output
-            if n.op == "Constant":
-                name = map_name(n.outputs[0].name)
-                print(f"Add Constant {name}\n")
-                try:
-                    add_to_map(refit_dict, name, n.outputs[0].values)
-                except:
-                    error(f"Failed to add Constant {name}\n")
-
-            # Handle scale and bias weights
-            elif n.op == "Conv":
-                if n.inputs[1].__class__ == gs.Constant:
-                    name = map_name(n.name + "_TRTKERNEL")
-                    try:
-                        add_to_map(refit_dict, name, n.inputs[1].values)
-                    except:
-                        error(f"Failed to add Conv {name}\n")
-
-                if n.inputs[2].__class__ == gs.Constant:
-                    name = map_name(n.name + "_TRTBIAS")
-                    try:
-                        add_to_map(refit_dict, name, n.inputs[2].values)
-                    except:
-                        error(f"Failed to add Conv {name}\n")
-
-            # For all other nodes: find node inputs that are initializers (AKA gs.Constant)
-            else:
-                for inp in n.inputs:
-                    name = map_name(inp.name)
-                    if inp.__class__ == gs.Constant:
-                        add_to_map(refit_dict, name, inp.values)
-
-        if dump_refit_path is not None:
-            print("Finished refit. Dumping result to disk.")
-            save_file(
-                refit_dict, dump_refit_path
-            )  # TODO need to come up with delta system to save only changed weights
-            return
-
+        refit_wts_cnt = 0
         for layer_name, weights_role in zip(all_weights[0], all_weights[1]):
-            if weights_role == trt.WeightsRole.KERNEL:
-                custom_name = layer_name + "_TRTKERNEL"
-            elif weights_role == trt.WeightsRole.BIAS:
-                custom_name = layer_name + "_TRTBIAS"
-            else:
-                custom_name = layer_name
-
-            # Skip refitting Trilu for now; scalar weights of type int64 value 1 - for clip model
-            if layer_name.startswith("onnx::Trilu"):
-                continue
-
-            if refit_dict[custom_name] is not None:
-                refitter.set_weights(layer_name, weights_role, refit_dict[custom_name])
-            else:
-                print(f"[W] No refit weights for layer: {layer_name}")
+            if layer_name in refit_dict:
+                print(f"[I] refit layer {layer_name}")
+                refitter.set_weights(layer_name, weights_role, refit_dict[layer_name])
+                refit_wts_cnt += 1
 
         if not refitter.refit_cuda_engine():
             print("Failed to refit!")
             exit(0)
+        print(f"[I] Total refit {refit_wts_cnt} weights.")
 
-    def refit_from_dump(self, dump_refit_path):
-        refit_dict = load_file(
-            dump_refit_path
-        )  # TODO if deltas are used needs to be unpacked here
-        refitter = trt.Refitter(self.engine, TRT_LOGGER)
-        all_weights = refitter.get_all()
-
-        for layer_name, weights_role in zip(all_weights[0], all_weights[1]):
-            if weights_role == trt.WeightsRole.KERNEL:
-                custom_name = layer_name + "_TRTKERNEL"
-            elif weights_role == trt.WeightsRole.BIAS:
-                custom_name = layer_name + "_TRTBIAS"
-            else:
-                custom_name = layer_name
-
-            # Skip refitting Trilu for now; scalar weights of type int64 value 1 - for clip model
-            if layer_name.startswith("onnx::Trilu"):
-                continue
-
-            if refit_dict[custom_name] is not None:
-                refitter.set_weights(layer_name, weights_role, refit_dict[custom_name])
-            else:
-                print(f"[W] No refit weights for layer: {layer_name}")
-
-        if not refitter.refit_cuda_engine():
-            print("Failed to refit!")
-            exit(0)        
-
-    def refit_from_dict(self, refit_dict):
-        refitter = trt.Refitter(self.engine, TRT_LOGGER)
-        all_weights = refitter.get_all()
-
-        # TODO ideally iterate over refit_dict as len(refit_dict) < len(all_weights)
-        for layer_name, weights_role in zip(all_weights[0], all_weights[1]):
-            if weights_role == trt.WeightsRole.KERNEL:
-                custom_name = layer_name + "_TRTKERNEL"
-            elif weights_role == trt.WeightsRole.BIAS:
-                custom_name = layer_name + "_TRTBIAS"
-            else:
-                custom_name = layer_name
-
-            # Skip refitting Trilu for now; scalar weights of type int64 value 1 - for clip model
-            if layer_name.startswith("onnx::Trilu"):
-                continue
-            
-            if custom_name in refit_dict:
-                refitter.set_weights(layer_name, weights_role, refit_dict[custom_name])
-            else:
-                print(f"[W] No refit weights for layer: {layer_name}")
-
-        if not refitter.refit_cuda_engine():
-            print("Failed to refit!")
-            exit(0)       
 
     def build(
         self,
@@ -433,37 +284,48 @@ class Engine:
         print(f"Loading TensorRT engine: {self.engine_path}")
         self.engine = engine_from_bytes(bytes_from_path(self.engine_path))
 
+        for idx in range(self.engine.num_io_tensors):
+            binding = self.engine[idx]
+            if self.engine.binding_is_input(binding):
+                self.inputs[binding] = idx
+            else:
+                self.outputs[binding] = idx
+
     def activate(self, reuse_device_memory=None):
         if reuse_device_memory:
             self.context = self.engine.create_execution_context_without_device_memory()
-        #    self.context.device_memory = reuse_device_memory
         else:
             self.context = self.engine.create_execution_context()
 
     def allocate_buffers(self, shape_dict=None, device="cuda"):
         nvtx.range_push("allocate_buffers")
-        for idx in range(self.engine.num_io_tensors):
-            binding = self.engine[idx]
-            if shape_dict and binding in shape_dict:
-                shape = shape_dict[binding].shape
-            else:
-                shape = self.context.get_binding_shape(idx)
+
+        for binding, idx in self.inputs.items():
             dtype = trt.nptype(self.engine.get_binding_dtype(binding))
-            if self.engine.binding_is_input(binding):
-                self.context.set_binding_shape(idx, shape)
+            self.context.set_binding_shape(idx, shape_dict[binding])
+
+        for binding, idx in self.outputs.items():
+            shape = self.context.get_binding_shape(idx)
+            dtype = trt.nptype(self.engine.get_binding_dtype(binding))
             tensor = torch.empty(
                 tuple(shape), dtype=numpy_to_torch_dtype_dict[dtype]
             ).to(device=device)
             self.tensors[binding] = tensor
+
         nvtx.range_pop()
 
+    # TODO Allow to parse buffffers for Output
     def infer(self, feed_dict, stream, use_cuda_graph=False):
         nvtx.range_push("set_tensors")
-        for name, buf in feed_dict.items():
-            self.tensors[name].copy_(buf)
 
+        # Inputs
+        for name, buf in feed_dict.items():
+            self.context.set_tensor_address(name, buf.data_ptr())
+
+        # Outputs
         for name, tensor in self.tensors.items():
             self.context.set_tensor_address(name, tensor.data_ptr())
+
         nvtx.range_pop()
         nvtx.range_push("execute")
         noerror = self.context.execute_async_v3(stream)
