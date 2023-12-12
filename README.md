@@ -15,6 +15,12 @@ Example instructions for Automatic1111:
 3. Copy the link to this repository and paste it into URL for extension's git repository
 4. Click Install
 
+### Full Tutorial
+
+[**Double Your Stable Diffusion Inference Speed with RTX Acceleration TensorRT: A Comprehensive Guide**](https://youtu.be/kvxX6NrPtEk)
+
+[![image](https://cdn-uploads.huggingface.co/production/uploads/6345bd89fe134dfd7a0dba40/QhVEeR5hzqZ5SXujvTxzs.png)](https://youtu.be/kvxX6NrPtEk)
+
 ## How to use
 
 1. Click on the “Generate Default Engines” button. This step takes 2-10 minutes depending on your GPU. You can generate engines for other combinations. 
