@@ -19,8 +19,6 @@ import torch
 from torch.cuda import nvtx
 from collections import OrderedDict
 import numpy as np
-import onnx
-import onnx_graphsurgeon as gs
 from polygraphy.backend.common import bytes_from_path
 from polygraphy import util
 from polygraphy.backend.trt import ModifyNetworkOutputs, Profile
@@ -28,13 +26,14 @@ from polygraphy.backend.trt import (
     engine_from_bytes,
     engine_from_network,
     network_from_onnx_path,
-    save_engine
+    save_engine,
 )
 from polygraphy.logger import G_LOGGER
 import tensorrt as trt
 from logging import error, warning
 from tqdm import tqdm
-import copy 
+import copy
+
 
 class Registry(dict):
     def __init__(self, name: str, *args, **kwargs):
@@ -81,6 +80,7 @@ else:
 torch_to_numpy_dtype_dict = {
     value: key for (key, value) in numpy_to_torch_dtype_dict.items()
 }
+
 
 class TQDMProgressMonitor(trt.IProgressMonitor):
     def __init__(self):
@@ -185,24 +185,44 @@ class Engine:
         self.inputs = {}
         self.outputs = {}
 
-    def refit_from_dict(self, refit_dict):
+    def refit_from_dict(self, refit_weights, is_fp16):
         # Initialize refitter
         refitter = trt.Refitter(self.engine, TRT_LOGGER)
-        all_weights = refitter.get_all()
-        assert len(all_weights)
 
-        refit_wts_cnt = 0
-        for layer_name, weights_role in zip(all_weights[0], all_weights[1]):
-            if layer_name in refit_dict:
-                print(f"[I] refit layer {layer_name}")
-                refitter.set_weights(layer_name, weights_role, refit_dict[layer_name])
-                refit_wts_cnt += 1
+        refitted_weights = set()
+        # iterate through all tensorrt refittable weights
+        for trt_weight_name in refitter.get_all_weights():
+            if trt_weight_name not in refit_weights:
+                continue
 
+            # get weight from state dict
+            trt_datatype = trt.DataType.FLOAT
+            if is_fp16:
+                refit_weights[trt_weight_name] = refit_weights[trt_weight_name].half()
+                trt_datatype = trt.DataType.HALF
+
+            # trt.Weight and trt.TensorLocation
+            refit_weights[trt_weight_name] = refit_weights[trt_weight_name].cpu()
+            trt_wt_tensor = trt.Weights(
+                trt_datatype,
+                refit_weights[trt_weight_name].data_ptr(),
+                torch.numel(refit_weights[trt_weight_name]),
+            )
+            trt_wt_location = (
+                trt.TensorLocation.DEVICE
+                if refit_weights[trt_weight_name].is_cuda
+                else trt.TensorLocation.HOST
+            )
+
+            # apply refit
+            # refitter.set_named_weights(trt_weight_name, trt_wt_tensor, trt_wt_location)
+            refitter.set_named_weights(trt_weight_name, trt_wt_tensor)
+            refitted_weights.add(trt_weight_name)
+
+        assert set(refitted_weights) == set(refit_weights.keys())
         if not refitter.refit_cuda_engine():
-            print("Failed to refit!")
+            print("Error: failed to refit new weights.")
             exit(0)
-        print(f"[I] Total refit {refit_wts_cnt} weights.")
-
 
     def build(
         self,
@@ -261,7 +281,9 @@ class Engine:
         profiles = copy.deepcopy(p)
         for profile in profiles:
             # Last profile is used for set_calibration_profile.
-            calib_profile = profile.fill_defaults(network[1]).to_trt(builder, network[1])
+            calib_profile = profile.fill_defaults(network[1]).to_trt(
+                builder, network[1]
+            )
             config.add_optimization_profile(calib_profile)
 
         try:

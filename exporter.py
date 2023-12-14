@@ -4,12 +4,10 @@ import onnx
 from logging import info, error
 import time
 import shutil
-import onnx_graphsurgeon as gs
 import numpy as np
-from safetensors.numpy import save_file
 from modules import shared
-import gc
-
+from collections import OrderedDict
+from onnx import numpy_helper
 from utilities import Engine
 from models_helper import UNetModelSplit
 import os
@@ -19,6 +17,7 @@ from optimum.onnx.utils import (
     check_model_uses_external_data,
 )
 from datastructures import ProfileSettings
+import json
 
 
 def apply_lora(model, lora_name, inputs):
@@ -41,84 +40,74 @@ def apply_lora(model, lora_name, inputs):
     return model
 
 
-def lora_from_pt(pytorch_model_sd: dict, onnx_path: str, delta: bool, prefix="unet"):
-    def convert_int64(arr):
-        if len(arr.shape) == 0:
-            return np.array([np.int32(arr)])
-        return arr
+def get_refit_weights(
+    state_dict, onnx_opt_path, weight_name_mapping, weight_shape_mapping
+):
+    refit_weights = OrderedDict()
+    onnx_opt_dir = os.path.dirname(onnx_opt_path)
+    onnx_opt_model = onnx.load(onnx_opt_path)
+    # Create initializer data hashes
+    initializer_hash_mapping = {}
+    onnx_data_mapping = {}
+    for initializer in onnx_opt_model.graph.initializer:
+        initializer_data = numpy_helper.to_array(
+            initializer, base_dir=onnx_opt_dir
+        ).astype(np.float16)
+        initializer_hash = hash(initializer_data.data.tobytes())
+        initializer_hash_mapping[initializer.name] = initializer_hash
+        onnx_data_mapping[initializer.name] = initializer_data
 
-    def add_to_map(
-        refit_dict, onnx_array, torch_array, delta, eps=1e-6
-    ):  # Shoud be sufficient since fp16 only goes to 6e-5
-        assert onnx_array.name not in refit_dict
+    for torch_name, initializer_name in weight_name_mapping.items():
+        initializer_hash = initializer_hash_mapping[initializer_name]
+        wt = state_dict[torch_name]
 
-        if torch_array.dtype == np.int64:
-            torch_array = convert_int64(torch_array)
+        # get shape transform info
+        initializer_shape, is_transpose = weight_shape_mapping[torch_name]
+        if is_transpose:
+            wt = torch.transpose(wt, 0, 1)
+        else:
+            wt = torch.reshape(wt, initializer_shape)
 
-        if torch_array.shape != onnx_array.values.shape:
-            torch_array = torch_array.transpose()
-            assert torch_array.shape == onnx_array.values.shape
+        # include weight if hashes differ
+        wt_hash = hash(wt.cpu().detach().numpy().astype(np.float16).data.tobytes())
+        if initializer_hash != wt_hash:
+            delta = wt - torch.tensor(onnx_data_mapping[initializer_name]).to(wt.device)
+            refit_weights[initializer_name] = delta.contiguous()
 
-        if delta:
-            assert torch_array.dtype == onnx_array.values.dtype
-            torch_array = torch_array - onnx_array.values
-        if torch_array.sum() < eps:
-            return
-        refit_dict[onnx_array.name] = torch_array
-
-    print(f"Refitting TensorRT engine with LoRA weights")
-
-    # Construct mapping from weight names in original ONNX model -> LoRA fused PyTorch model
-    nodes = gs.import_onnx(onnx.load(onnx_path)).toposort().nodes
-
-    refit_dict = {}
-    lora_keywords = ["to_q", "to_k", "to_v", "to_out"]
-    for node in nodes:
-        for kw in lora_keywords:
-            if kw in node.name and "MatMul" in node.name:
-                for inp in node.inputs:
-                    if inp.__class__ == gs.Constant:
-                        onnx_node_name = node.name
-                        pt_weight_name = onnx_node_name.replace(f"/{kw}/{kw}", f"/{kw}")
-                        pt_weight_name = ".".join(
-                            [prefix, *pt_weight_name.split("/")[2:]]
-                        )
-                        pt_weight_name = pt_weight_name.replace("MatMul", "weight")
-
-                        # assert pt_weight_name in pytorch_model_sd
-                        if pt_weight_name not in pytorch_model_sd:
-                            print(
-                                f"Warning: {pt_weight_name} not found in PyTorch model"
-                            )
-                        add_to_map(
-                            refit_dict,
-                            inp,
-                            pytorch_model_sd[pt_weight_name].cpu().detach().numpy(),
-                            delta=delta,
-                        )
-
-    return refit_dict
+    return refit_weights
 
 
 def export_lora(
-    modelobj: UNetModelSplit, onnx_path: str, lora_name: str, profile: ProfileSettings
+    modelobj: UNetModelSplit,
+    onnx_path: str,
+    weights_map_path: str,
+    lora_name: str,
+    profile: ProfileSettings,
 ):
     inputs = modelobj.get_encoder_sample_input(
         profile.bs_opt * 2, profile.h_opt // 8, profile.w_opt // 8, profile.t_min
     )
-    with torch.inference_mode(), torch.autocast("cuda"):
-        modelobj.unet = apply_lora(modelobj.unet, lora_name, inputs)
+    with open(weights_map_path, "r") as fp_wts:
+        print(f"[I] Loading weights map: {weights_map_path} ")
+        [weights_name_mapping, weights_shape_mapping] = json.load(fp_wts)
 
-    encoder_refit = lora_from_pt(
-        modelobj.encoder.state_dict(),
-        os.path.join(onnx_path, "encoder.onnx"),
-        delta=True,
-    )
-    decoder_refit = lora_from_pt(
-        modelobj.decoder.state_dict(),
-        os.path.join(onnx_path, "decoder.onnx"),
-        delta=True,
-    )
+    with torch.inference_mode(), torch.autocast("cuda"):
+        modelobj.unet = apply_lora(
+            modelobj.unet, os.path.splitext(lora_name)[0], inputs
+        )
+
+        encoder_refit = get_refit_weights(
+            modelobj.unet.state_dict(),
+            os.path.join(onnx_path, "encoder.onnx"),
+            weights_name_mapping["encoder"],
+            weights_shape_mapping["encoder"],
+        )
+        decoder_refit = get_refit_weights(
+            modelobj.unet.state_dict(),
+            os.path.join(onnx_path, "decoder.onnx"),
+            weights_name_mapping["decoder"],
+            weights_shape_mapping["decoder"],
+        )
 
     return encoder_refit, decoder_refit
 
@@ -181,8 +170,9 @@ def export_onnx(
 def _export_onnx(
     model, inputs, path, opset, in_names, out_names, dyn_axes, optimizer=None
 ):
-    os.makedirs(os.path.abspath("onnx_tmp"), exist_ok=True)
-    tmp_path = os.path.abspath(os.path.join("onnx_tmp", "model.onnx"))
+    tmp_dir = os.path.abspath("onnx_tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    tmp_path = os.path.join(tmp_dir, "model.onnx")
     try:
         info("Exporting to ONNX...")
         with torch.inference_mode(), torch.autocast("cuda"):
@@ -218,15 +208,19 @@ def _export_onnx(
             location=path.name + "_data",
             size_threshold=1024,
         )
-        shutil.rmtree(os.path.abspath("onnx_tmp"))
 
     if optimizer is not None:
         try:
-            onnx_opt_graph = optimizer("encoder", onnx_model)
+            onnx_opt_graph = optimizer("unet", onnx_model)
             onnx.save(onnx_opt_graph, path)
         except Exception as e:
             error("Optimizing ONNX failed. {}".format(e))
             return
+
+    if not model_uses_external_data and optimizer is None:
+        shutil.move(tmp_path, str(path))
+
+    shutil.rmtree(tmp_dir)
 
 
 def export_trt(trt_path, onnx_path, timing_cache, profile, use_fp16):

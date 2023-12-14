@@ -21,10 +21,12 @@ CNET_MODEL_PATH = os.path.join(paths_internal.models_path, "ControlNet")
 if not os.path.exists(CNET_MODEL_PATH):
     os.makedirs(CNET_MODEL_PATH)
 
+
 def get_cc():
     cc_major = torch.cuda.get_device_properties(0).major
     cc_minor = torch.cuda.get_device_properties(0).minor
     return cc_major, cc_minor
+
 
 cc_major, cc_minor = get_cc()
 
@@ -51,11 +53,17 @@ class ModelManager:
                             continue
                         model_file = os.path.join(profile_dir, "model.json")
                         if not os.path.exists(model_file):
-                            warning("Model file does not exist at {}... This might cause issues.".format(profile_dir))
+                            warning(
+                                "Model file does not exist at {}... This might cause issues.".format(
+                                    profile_dir
+                                )
+                            )
                             continue
                         self.model_files.append(model_file)
                         config = self.read_json(model_file)
-                        self.all_models.setdefault(cc, {}).setdefault(model_type, {}).setdefault(model_name, []).append(
+                        self.all_models.setdefault(cc, {}).setdefault(
+                            model_type, {}
+                        ).setdefault(model_name, []).append(
                             {"config": config, "filepath": profile_dir}
                         )
 
@@ -64,8 +72,10 @@ class ModelManager:
         onnx_filename = model_name + ".onnx"
         onnx_path = os.path.join(ONNX_MODEL_DIR, onnx_filename)
         return onnx_filename, onnx_path
-    
-    def get_trt_path(self, model_name: str, profile: dict, static_shape: bool, model_type: ModelType):
+
+    def get_trt_path(
+        self, model_name: str, profile: dict, static_shape: bool, model_type: ModelType
+    ):
         hash_dims = ["sample", "encoder_hidden_states"]
         profile_hash = []
         n_profiles = 1 if static_shape else 3
@@ -82,7 +92,9 @@ class ModelManager:
             dim_hash = str(hex(int(dim_hash))[2:])
 
         profile_hash = "id" + dim_hash
-        trt_path = os.path.join(TRT_MODEL_DIR, self.cc, str(model_type), model_name, profile_hash)
+        trt_path = os.path.join(
+            TRT_MODEL_DIR, self.cc, str(model_type), model_name, profile_hash
+        )
 
         return profile_hash, trt_path
 
@@ -97,7 +109,7 @@ class ModelManager:
         )
 
         return cache
-    
+
     def add_entry(
         self,
         model_name: str,
@@ -108,15 +120,13 @@ class ModelManager:
         vram: int,
         model_type: ModelType,
     ):
-        config = ModelConfig(
-            profile, static_shapes, fp32, refit, model_type, vram
-        )
+        config = ModelConfig(profile, static_shapes, fp32, refit, model_type, vram)
         trt_name, trt_path = self.get_trt_path(
             model_name, profile, static_shapes, model_type
         )
 
         self.write_json(os.path.join(trt_path, "model.json"), config)
-
+        model_type = str(model_type).lower()
         if self.cc not in self.all_models:
             self.all_models[self.cc] = {}
 
@@ -132,6 +142,11 @@ class ModelManager:
             }
         )
 
+    def get_weights_map_path(self, model_name: str, model_type: ModelType):
+        return os.path.join(
+            TRT_MODEL_DIR, self.cc, str(model_type), model_name, "weights_map.json"
+        )
+
     def get_available_models(self, model_type: ModelType):
         available = self.all_models.get(self.cc, {})
         if model_type == ModelType.UNDEFINED:
@@ -141,8 +156,10 @@ class ModelManager:
             return out
         else:
             return available.get(str(model_type), {})
-    
-    def get_valid_models_from_dict(self, base_model: str, feed_dict: dict, model_type: ModelType):
+
+    def get_valid_models_from_dict(
+        self, base_model: str, feed_dict: dict, model_type: ModelType
+    ):
         valid_models = []
         distances = []
         idx = []
@@ -192,7 +209,8 @@ class ModelManager:
             return out
 
         return ModelConfig(**out)
-    
+
+
 @dataclass
 class ModelConfig:
     profile: dict

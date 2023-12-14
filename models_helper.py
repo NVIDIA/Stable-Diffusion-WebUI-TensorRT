@@ -16,12 +16,14 @@
 #
 
 import onnx
-from onnx import shape_inference
+from onnx import shape_inference, numpy_helper
 import os
 from polygraphy.backend.onnx.loader import fold_constants
 import tempfile
 import torch
 import onnx_graphsurgeon as gs
+import json
+import numpy as np
 
 from ldm.modules.diffusionmodules.util import timestep_embedding
 from torch import nn
@@ -173,7 +175,7 @@ class UNetModelSplit(nn.Module):
             max_latent_width,
         ) = profile.get_latent_dim()
 
-        return {
+        shape_dict = {
             "sample": [
                 (min_batch, self.unet.in_channels, min_latent_height, min_latent_width),
                 (opt_batch, self.unet.in_channels, latent_height, latent_width),
@@ -186,6 +188,14 @@ class UNetModelSplit(nn.Module):
                 (max_batch, profile.t_max, self.embedding_dim),
             ],
         }
+        if self.is_xl:
+            shape_dict["y"] = [
+                (min_batch, self.num_xl_classes),
+                (opt_batch, self.num_xl_classes),
+                (max_batch, self.num_xl_classes),
+            ]
+
+        return shape_dict
 
     def get_decoder_input_names(self):
         input_names = ["encoder_hidden_states"]
@@ -210,20 +220,26 @@ class UNetModelSplit(nn.Module):
         dtype=torch.float32,
     ):
         context = torch.randn(
-                batch_size,
-                text_len,
-                self.embedding_dim,
-                dtype=dtype,
-                device=device,
+            batch_size,
+            text_len,
+            self.embedding_dim,
+            dtype=dtype,
+            device=device,
         )
-        emb = torch.randn(batch_size, self.emb_chn).to(dtype=dtype, device=device)
+        emb = torch.randn(batch_size, self.emb_chn).to(
+            dtype=torch.float16, device=device
+        )
 
         hidden_states = []
         for i, (hs, s) in enumerate(self.hs):
             h = latent_height // s
             w = latent_width // s
-            hidden_states.append(torch.randn(batch_size, hs, h, w).to(dtype=dtype, device=device))
-        mid_states = torch.clone(hidden_states[-1]).to(dtype=dtype, device=device)
+            hidden_states.append(
+                torch.randn(batch_size, hs, h, w).to(dtype=torch.float16, device=device)
+            )
+        mid_states = torch.clone(hidden_states[-1]).to(
+            dtype=torch.float16, device=device
+        )
         return (context, hidden_states, mid_states, emb)
 
     def get_decoder_input_profile(self, profile: ProfileSettings):
@@ -256,7 +272,111 @@ class UNetModelSplit(nn.Module):
             (max_batch, self.emb_chn),
         ]
 
+        shape_dict["encoder_hidden_states"] = [
+            (min_batch, profile.t_min, self.embedding_dim),
+            (opt_batch, profile.t_opt, self.embedding_dim),
+            (max_batch, profile.t_max, self.embedding_dim),
+        ]
+
         return shape_dict
+
+    # Helper utility for weights map
+    def export_weights_map(self, onnx_opt_path, weights_map_path):
+        onnx_opt_dir = onnx_opt_path
+        state_dict = self.unet.state_dict()
+        # onnx_opt_model = onnx.load(onnx_opt_path)
+        onnx_encoder = onnx.load(os.path.join(onnx_opt_dir, "encoder.onnx"))
+        onnx_decoder = onnx.load(os.path.join(onnx_opt_dir, "decoder.onnx"))
+
+        # Create initializer data hashes
+        def init_hash_map(onnx_opt_model):
+            initializer_hash_mapping = {}
+            for initializer in onnx_opt_model.graph.initializer:
+                initializer_data = numpy_helper.to_array(
+                    initializer, base_dir=onnx_opt_dir
+                ).astype(np.float16)
+                initializer_hash = hash(initializer_data.data.tobytes())
+                initializer_hash_mapping[initializer.name] = (
+                    initializer_hash,
+                    initializer_data.shape,
+                )
+            return initializer_hash_mapping
+
+        initializer_hash_mapping_encoder = init_hash_map(onnx_encoder)
+        initializer_hash_mapping_decoder = init_hash_map(onnx_decoder)
+
+        weights_name_mapping = {"encoder": {}, "decoder": {}}
+        weights_shape_mapping = {"encoder": {}, "decoder": {}}
+        # set to keep track of initializers already added to the name_mapping dict
+        initializers_mapped = set()
+        for wt_name, wt in state_dict.items():
+            # get weight hash
+            wt = wt.cpu().detach().numpy().astype(np.float16)
+            wt_hash = hash(wt.data.tobytes())
+            wt_t_hash = hash(np.transpose(wt).data.tobytes())
+
+            for initializer_name, (
+                initializer_hash,
+                initializer_shape,
+            ) in initializer_hash_mapping_encoder.items():
+                # Due to constant folding, some weights are transposed during export
+                # To account for the transpose op, we compare the initializer hash to the
+                # hash for the weight and its transpose
+                if wt_hash == initializer_hash or wt_t_hash == initializer_hash:
+                    # The assert below ensures there is a 1:1 mapping between
+                    # PyTorch and ONNX weight names. It can be removed in cases where 1:many
+                    # mapping is found and name_mapping[wt_name] = list()
+                    assert initializer_name not in initializers_mapped
+                    weights_name_mapping["encoder"][wt_name] = initializer_name
+                    initializers_mapped.add(initializer_name)
+                    is_transpose = False if wt_hash == initializer_hash else True
+                    weights_shape_mapping["encoder"][wt_name] = (
+                        initializer_shape,
+                        is_transpose,
+                    )
+
+            for initializer_name, (
+                initializer_hash,
+                initializer_shape,
+            ) in initializer_hash_mapping_decoder.items():
+                if (
+                    wt_name
+                    in weights_name_mapping["encoder"] | weights_name_mapping["decoder"]
+                ):
+                    break
+                # Due to constant folding, some weights are transposed during export
+                # To account for the transpose op, we compare the initializer hash to the
+                # hash for the weight and its transpose
+                if wt_hash == initializer_hash or wt_t_hash == initializer_hash:
+                    # The assert below ensures there is a 1:1 mapping between
+                    # PyTorch and ONNX weight names. It can be removed in cases where 1:many
+                    # mapping is found and name_mapping[wt_name] = list()
+                    assert initializer_name not in initializers_mapped
+                    weights_name_mapping["decoder"][wt_name] = initializer_name
+                    initializers_mapped.add(initializer_name)
+                    is_transpose = False if wt_hash == initializer_hash else True
+                    weights_shape_mapping["decoder"][wt_name] = (
+                        initializer_shape,
+                        is_transpose,
+                    )
+
+            # Sanity check: Were any weights not matched
+            if (
+                wt_name
+                not in weights_name_mapping["encoder"] | weights_name_mapping["decoder"]
+            ):
+                print(
+                    f"[I] PyTorch weight {wt_name} not matched with any ONNX initializer"
+                )
+        print(
+            f'[I] Encoder: {len(weights_name_mapping["encoder"].keys())} PyTorch weights were matched with ONNX initializers'
+        )
+        print(
+            f'[I] Decoder: {len(weights_name_mapping["decoder"].keys())} PyTorch weights were matched with ONNX initializers'
+        )
+        assert weights_name_mapping.keys() == weights_shape_mapping.keys()
+        with open(weights_map_path, "w") as fp:
+            json.dump([weights_name_mapping, weights_shape_mapping], fp)
 
     @staticmethod
     def optimize(name, onnx_graph, verbose=False):

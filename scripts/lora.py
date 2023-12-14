@@ -1,9 +1,11 @@
 import os
 from typing import List
 import numpy as np
-from safetensors.numpy import load_file
+from safetensors.torch import load_file
 import onnx_graphsurgeon as gs
 import onnx
+import torch
+from onnx import numpy_helper
 
 
 def merge_loras(loras: List[str], scales: List[str], model_name: str):
@@ -22,27 +24,24 @@ def apply_loras(
     base_path: str, loras: List[str], scales: List[str], model_name: str
 ) -> dict:
     refit_dict = merge_loras(loras, scales, model_name)
-    base = gs.import_onnx(
-        onnx.load(os.path.join(base_path, model_name + ".onnx"))
-    ).toposort().nodes
+    base = onnx.load(os.path.join(base_path, model_name + ".onnx"))
+    onnx_opt_dir = os.path.dirname(base_path)
 
     def convert_int64(arr):
         if len(arr.shape) == 0:
             return np.array([np.int32(arr)])
         return arr
 
-    lora_keywords = ["to_q", "to_k", "to_v", "to_out"]
-    for node in base:
-        for kw in lora_keywords:
-            if kw in node.name and "MatMul" in node.name:
-                for inp in node.inputs:
-                    if inp.__class__ == gs.Constant:
-                        if inp.name not in refit_dict:
-                            continue
-                        if inp.values.dtype == np.int64:
-                            inp.values = convert_int64(inp.values)
-                        assert inp.values.shape == refit_dict[inp.name].shape
-                        assert inp.values.dtype == refit_dict[inp.name].dtype
-                        refit_dict[inp.name] += inp.values
+    for initializer in base.graph.initializer:
+        if initializer.name not in refit_dict:
+            continue
+
+        wt = refit_dict[initializer.name]
+        initializer_data = numpy_helper.to_array(
+            initializer, base_dir=onnx_opt_dir
+        ).astype(np.float16)
+        delta = torch.tensor(initializer_data).to(wt.device) + wt
+
+        refit_dict[initializer.name] = delta.contiguous()
 
     return refit_dict

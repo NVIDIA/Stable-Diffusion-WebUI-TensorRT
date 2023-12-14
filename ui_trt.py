@@ -10,7 +10,7 @@ from modules.ui_components import ToolButton
 
 from exporter import export_onnx, export_trt, export_lora
 from utilities import Engine
-from safetensors.numpy import save_file
+from safetensors.torch import save_file
 
 from models_helper import UNetModelSplit, CNetModel
 import logging
@@ -167,6 +167,16 @@ def export_unet_to_trt(
     static_shapes,
     preset,
 ):
+    def disable_checkpoint(self):
+        if getattr(self, "use_checkpoint", False) == True:
+            self.use_checkpoint = False
+        if getattr(self, "checkpoint", False) == True:
+            self.checkpoint = False
+
+    sd_model.model.diffusion_model.apply(disable_checkpoint)
+    sd_unet.apply_unet("None")
+    sd_hijack.model_hijack.apply_optimizations("None")
+
     is_xl = sd_model.is_sdxl
     model_name = sd_model.sd_checkpoint_info.model_name
 
@@ -196,16 +206,6 @@ def export_unet_to_trt(
 
     diable_optimizations = is_xl
     embedding_dim = get_context_dim()
-
-    def disable_checkpoint(self):
-        if getattr(self, "use_checkpoint", False) == True:
-            self.use_checkpoint = False
-        if getattr(self, "checkpoint", False) == True:
-            self.checkpoint = False
-
-    sd_model.model.diffusion_model.apply(disable_checkpoint)
-    sd_unet.apply_unet("None")
-    sd_hijack.model_hijack.apply_optimizations("None")
 
     modelobj = UNetModelSplit(
         sd_model.model.diffusion_model,
@@ -334,11 +334,18 @@ def export_lora_to_trt(lora_name, force_export):
         text_minlen=profile_settings.t_min,
         is_xl=is_xl,
     )
-    # TODO ensure that checkpoint is LoRA! LÖyCoris needs to be postponed see kohya module?!
+
+    weights_map_path = modelmanager.get_weights_map_path(model_name, ModelType.UNET)
+    if not os.path.exists(weights_map_path):
+        modelobj.export_weights_map(onnx_base_path, weights_map_path)
 
     hash, lora_trt_path = modelmanager.get_trt_path(lora_name, {}, {}, ModelType.LORA)
     enc_dict, dec_dict = export_lora(
-        modelobj, onnx_base_path, lora_model["filename"], profile_settings
+        modelobj,
+        onnx_base_path,
+        weights_map_path,
+        lora_model["filename"],
+        profile_settings,
     )
 
     os.makedirs(lora_trt_path, exist_ok=True)

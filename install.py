@@ -91,7 +91,7 @@ def install():
         )
 
     # ControlNet AUX
-    if not launch.is_installed("cv2"):
+    if not launch.is_installed("controlnet_aux"):
         print("ControlNetAux is not installed! Installing...")
         launch.run_pip(
             "install controlnet-aux",

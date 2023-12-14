@@ -95,7 +95,8 @@ class SplitUNetTRT:
         if hs is not None:
             nvtx.range_push("hidden_states")
             for k, v in hs.items():
-                out[k] += v.float()
+                assert out[k].dtype == v.dtype
+                out[k] += v
             nvtx.range_pop()
 
         out.update({"encoder_hidden_states": context.float()})
@@ -127,21 +128,17 @@ class SplitUNetTRT:
             # Need to ensure that weights that have been modified before and are not present anymore are reset.
             self.refitted_keys = set()
             self.switch_engine()
-    
-        self.encoder.refit_from_dict(enc)
-        self.decoder.refit_from_dict(dec)
+
+        self.encoder.refit_from_dict(enc, is_fp16=True)
+        self.decoder.refit_from_dict(dec, is_fp16=True)
 
         self.refitted_keys = set(enc.keys()) | set(dec.keys())
 
     def switch_engine(self):
         self.profile_idx = GLOBAL_ARGS.idx
         self.loaded_config = self.configs[self.profile_idx]
-        self.encoder.reset(
-            os.path.join(self.loaded_config["filepath"], "encoder.trt")
-        )
-        self.decoder.reset(
-            os.path.join(self.loaded_config["filepath"], "decoder.trt")
-        )
+        self.encoder.reset(os.path.join(self.loaded_config["filepath"], "encoder.trt"))
+        self.decoder.reset(os.path.join(self.loaded_config["filepath"], "decoder.trt"))
         self.activate()
         self.shape_hash = 0
 
@@ -277,7 +274,9 @@ class TrtUnet(sd_unet.SdUnet):
         self.stream = None
         self.model_name = model_name
         self.unet = SplitUNetTRT(configs)
-        self.controlnets = ControlNetsTRT(modelmanager.get_available_models(ModelType.CONTROLNET))
+        self.controlnets = ControlNetsTRT(
+            modelmanager.get_available_models(ModelType.CONTROLNET)
+        )
 
     def forward(self, x, timesteps, context, *args, **kwargs):
         y = kwargs.get("y", None)
@@ -435,7 +434,9 @@ class TensorRTScript(scripts.Script):
             lora_pathes.append(
                 os.path.join(
                     TRT_MODEL_DIR,
-                    modelmanager.get_available_models(ModelType.LORA)[lora_name][0]["filepath"],
+                    modelmanager.get_available_models(ModelType.LORA)[lora_name][0][
+                        "filepath"
+                    ],
                 )
             )
 

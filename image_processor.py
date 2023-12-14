@@ -8,6 +8,7 @@ from utilities import Registry
 
 PREPROCESSOR = Registry("preprocessor")
 
+
 @PREPROCESSOR.register("seg")
 def seg(image: Image):
     image_processor = AutoImageProcessor.from_pretrained(
@@ -38,9 +39,11 @@ def seg(image: Image):
     image = Image.fromarray(color_seg)
     return image
 
+
 @PREPROCESSOR.register("scribble")
 def scribble(image: Image):
     return hed(image, scribble=True)
+
 
 @PREPROCESSOR.register("openpose")
 def openpose(
@@ -49,6 +52,7 @@ def openpose(
     openpose = OpenposeDetector.from_pretrained("lllyasviel/ControlNet")
     image = openpose(image)
     return image
+
 
 @PREPROCESSOR.register("normal")
 def normal(image: Image):
@@ -78,16 +82,20 @@ def normal(image: Image):
     image = Image.fromarray(image)
     return image
 
+
 @PREPROCESSOR.register("mlsd")
 def mlsd(image: Image):
     mlsd = MLSDdetector.from_pretrained("lllyasviel/ControlNet")
     image = mlsd(image)
     return image
 
+
 @PREPROCESSOR.register("hed")
 def hed(image: Image, scribble=False):
-    hed = HEDdetector.from_pretrained("lllyasviel/ControlNet")
+    hed = HEDdetector.from_pretrained("lllyasviel/Annotators")
     image = hed(image, scribble=scribble)
+    return image
+
 
 @PREPROCESSOR.register("depth")
 def depth(image: Image):
@@ -101,6 +109,7 @@ def depth(image: Image):
 
     return image
 
+
 @PREPROCESSOR.register("canny")
 def canny(image: Image, low_threshold: int = 100, high_threshold: int = 200):
     image = np.array(image)
@@ -112,9 +121,10 @@ def canny(image: Image, low_threshold: int = 100, high_threshold: int = 200):
 
     return image
 
+
 def crop_resize(image: Image, width: int, height: int, crop: bool, fill: bool):
     if image.size == (width, height):
-        return image 
+        return image
 
     ar_img = image.size[0] / image.size[1]
     ar_out = width / height
@@ -127,9 +137,12 @@ def crop_resize(image: Image, width: int, height: int, crop: bool, fill: bool):
     else:
         crop = fill = False
         return image.resize(out_size, Image.BILINEAR)
-    
+
     scale_factor = out_size[dim] / image.size[dim]
-    image = image.resize((int(image.size[0] * scale_factor), int(image.size[1] * scale_factor)), Image.BILINEAR)
+    image = image.resize(
+        (int(image.size[0] * scale_factor), int(image.size[1] * scale_factor)),
+        Image.BILINEAR,
+    )
 
     if crop:
         crop_size = min(image.size[not dim], out_size[not dim])
@@ -147,7 +160,9 @@ def crop_resize(image: Image, width: int, height: int, crop: bool, fill: bool):
         left = right = pad if not dim else 0
         top = bottom = pad if dim else 0
 
-        out_fill_size = (image.size[0], fill_size) if dim else (fill_size, image.size[1])
+        out_fill_size = (
+            (image.size[0], fill_size) if dim else (fill_size, image.size[1])
+        )
         result = Image.new(image.mode, out_fill_size, "black")
         result.paste(image, (left, top))
         image = result
@@ -155,14 +170,21 @@ def crop_resize(image: Image, width: int, height: int, crop: bool, fill: bool):
     image = image.resize(out_size, Image.BILINEAR)
     return image
 
+
 def preprocess_controlnet_images(batch_size: int, images: Image = None, device="cuda"):
     if images is None:
         return None
-    images = [(np.array(i.convert("RGB")).astype(np.float32) / 255.0)[..., None].transpose(3, 2, 0, 1).repeat(batch_size, axis=0) for i in images]
+    images = [
+        (np.array(i.convert("RGB")).astype(np.float32) / 255.0)[..., None]
+        .transpose(3, 2, 0, 1)
+        .repeat(batch_size, axis=0)
+        for i in images
+    ]
     # do_classifier_free_guidance
     images = [torch.cat([torch.from_numpy(i).to(device).float()] * 2) for i in images]
     images = torch.cat([image[None, ...] for image in images], dim=0)
     return images
+
 
 palette = np.asarray(
     [
