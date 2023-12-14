@@ -332,7 +332,7 @@ class TensorRTScript(scripts.Script):
                     "HIRES Fix resolution must be divisible by 64 in both dimensions. Please change the upscale factor or disable HIRES Fix."
                 )
 
-    def get_profile_idx(self, p, model_name):
+    def get_profile_idx(self, p, model_name, model_type):
         best_hr = None
         hr_scale = p.hr_scale if p.enable_hr else 1
         (
@@ -340,7 +340,7 @@ class TensorRTScript(scripts.Script):
             distances,
             idx,
         ) = modelmanager.get_valid_models(
-            model_name, p.width, p.height, p.batch_size, 77, ModelType.UNET
+            model_name, p.width, p.height, p.batch_size, 77, model_type
         )  # TODO: max_embedding, just ignore?
         if len(valid_models) == 0:
             gr.Error(
@@ -353,7 +353,7 @@ class TensorRTScript(scripts.Script):
             hr_w = int(p.width * p.hr_scale)
             hr_h = int(p.height * p.hr_scale)
             valid_models_hr, distances_hr, idx_hr = modelmanager.get_valid_models(
-                model_name, hr_w, hr_h, p.batch_size, 77, ModelType.UNET
+                model_name, hr_w, hr_h, p.batch_size, 77, model_type
             )  # TODO: max_embedding
             if len(valid_models_hr) == 0:
                 gr.Error(
@@ -388,14 +388,14 @@ class TensorRTScript(scripts.Script):
                     p.sd_model_name, sd_unet_option.model_name
                 )
             )
-        GLOBAL_ARGS.idx, GLOBAL_ARGS.hr_idx = self.get_profile_idx(p, p.sd_model_name)
+        GLOBAL_ARGS.idx, GLOBAL_ARGS.hr_idx = self.get_profile_idx(p, p.sd_model_name, ModelType.UNET)
 
         self.get_loras(p)
 
         controlnets = p.__dict__.get("controlnet", [])
         GLOBAL_ARGS.controlnets = {}
         for controlnet in controlnets:
-            controlnet.idx, controlnet.hr_idx = self.get_profile_idx(p, controlnet.name)
+            controlnet.idx, controlnet.hr_idx = self.get_profile_idx(p, controlnet.name, ModelType.CONTROLNET)
             GLOBAL_ARGS.controlnets[controlnet.name] = controlnet
 
     def get_loras(self, p):
