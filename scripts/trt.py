@@ -11,6 +11,9 @@ from typing import List
 from model_manager import TRT_MODEL_DIR, modelmanager
 from polygraphy.logger import G_LOGGER
 import gradio as gr
+import re
+from datastructures import UNetEngineArgs, ModelType
+from scripts.lora import apply_loras
 
 G_LOGGER.module_severity = G_LOGGER.ERROR
 
@@ -22,38 +25,29 @@ class TrtUnetOption(sd_unet.SdUnetOption):
         self.configs = filename
 
     def create_unet(self):
-        lora_path = None
-        if self.configs[0]["config"].lora:
-            lora_path = os.path.join(TRT_MODEL_DIR, self.configs[0]["filepath"])
-            self.model_name = self.configs[0]["base_model"]
-            self.configs = modelmanager.available_models()[self.model_name]
-        return TrtUnet(self.model_name, self.configs, lora_path)
+        return TrtUnet(self.model_name, self.configs)
 
 
-# This is ugly. Is there a better way to parse this as kwargs to the SD Unet?
-GLOBAL_KWARGS = {"profile_idx": None, "profile_hr_idx": None, "model_name": ""}
+GLOBAL_ARGS = UNetEngineArgs(0, 0, None, {})
 
 
 class TrtUnet(sd_unet.SdUnet):
-    def __init__(
-        self, model_name: str, configs: List[dict], lora_path, *args, **kwargs
-    ):
+    def __init__(self, model_name: str, configs: List[dict], *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if not model_name == GLOBAL_KWARGS["model_name"]:
-            raise ValueError(
-                """Selected torch model ({}) does not match the selected TensorRT U-Net ({}). 
-                Please ensure that both models are the same or select Automatic from the SD UNet dropdown.""".format(
-                    GLOBAL_KWARGS["model_name"], model_name
-                )
-            )
-        self.configs = configs
+
         self.stream = None
         self.model_name = model_name
-        self.lora_path = lora_path
-        self.engine_vram_req = 0
+        self.configs = configs
 
-        self.profile_idx = GLOBAL_KWARGS["profile_idx"]
+        self.profile_idx = GLOBAL_ARGS.idx
+        if self.profile_idx is None:
+            self.profile_idx = 0
         self.loaded_config = self.configs[self.profile_idx]
+
+        self.engine_vram_req = 0
+        self.shape_hash = 0
+        self.refitted_keys = set()
+
         self.engine = Engine(
             os.path.join(TRT_MODEL_DIR, self.loaded_config["filepath"])
         )
@@ -68,7 +62,7 @@ class TrtUnet(sd_unet.SdUnet):
         if "y" in kwargs:
             feed_dict["y"] = kwargs["y"].float()
 
-        if not self.profile_idx == GLOBAL_KWARGS["profile_idx"]:
+        if not self.profile_idx == GLOBAL_ARGS.idx:
             self.switch_engine()
 
         tmp = torch.empty(
@@ -83,24 +77,38 @@ class TrtUnet(sd_unet.SdUnet):
         nvtx.range_pop()
         return out
 
+    def apply_loras(self):
+        if GLOBAL_ARGS.lora is None:
+            refit_dict = {}
+        else:
+            refit_dict = GLOBAL_ARGS.lora
+        if not self.refitted_keys.issubset(set(refit_dict.keys())):
+            # Need to ensure that weights that have been modified before and are not present anymore are reset.
+            self.refitted_keys = set()
+            self.switch_engine()
+
+        self.engine.refit_from_dict(refit_dict, is_fp16=True)
+        self.refitted_keys = set(refit_dict.keys())
+
+    def set_idx(self):
+        if GLOBAL_ARGS.idx is None:
+            raise Exception("No valid profile found. Please generate a profile first.")
+        self.profile_idx = GLOBAL_ARGS.idx
+
     def switch_engine(self):
-        self.profile_idx = GLOBAL_KWARGS["profile_idx"]
+        self.set_idx()
         self.loaded_config = self.configs[self.profile_idx]
-        self.deactivate()
-        self.engine = Engine(
-            os.path.join(TRT_MODEL_DIR, self.loaded_config["filepath"])
-        )
+        self.engine.reset(os.path.join(TRT_MODEL_DIR, self.loaded_config["filepath"]))
         self.activate()
+        self.shape_hash = 0
 
     def activate(self):
+        self.shape_hash = 0
         self.engine.load()
         print(f"\nLoaded Profile: {self.profile_idx}")
         print(self.engine)
         self.engine_vram_req = self.engine.engine.device_memory_size
         self.engine.activate(True)
-
-        if self.lora_path is not None:
-            self.engine.refit_from_dump(self.lora_path)
 
     def deactivate(self):
         self.shape_hash = 0
@@ -110,7 +118,8 @@ class TrtUnet(sd_unet.SdUnet):
 class TensorRTScript(scripts.Script):
     def __init__(self) -> None:
         self.loaded_model = None
-        pass
+        self.lora_hash = ""
+        self.update_lora = False
 
     def title(self):
         return "TensorRT"
@@ -124,78 +133,150 @@ class TensorRTScript(scripts.Script):
     def before_process(self, p, *args):  # 1
         # Check divisibilty
         if p.width % 64 or p.height % 64:
-            raise ValueError(
-                "Target resolution must be divisible by 64 in both dimensions."
-            )
+            gr.Error("Target resolution must be divisible by 64 in both dimensions.")
 
         if p.enable_hr:
             hr_w = int(p.width * p.hr_scale)
             hr_h = int(p.height * p.hr_scale)
             if hr_w % 64 or hr_h % 64:
-                raise ValueError(
+                gr.Error(
                     "HIRES Fix resolution must be divisible by 64 in both dimensions. Please change the upscale factor or disable HIRES Fix."
                 )
 
-        # lora p.prompt == '<lora:BarbieCore:1>
-
-    def process(self, p, *args):  # 2
-        # before unet_init
+    def get_profile_idx(self, p, model_name, model_type):
+        best_hr = None
         hr_scale = p.hr_scale if p.enable_hr else 1
         (
             valid_models,
             distances,
             idx,
         ) = modelmanager.get_valid_models(
-            p.sd_model_name, p.width, p.height, p.batch_size, 77
-        )  # TODO: max_embedding
+            model_name,
+            p.width,
+            p.height,
+            p.batch_size,
+            77,  # model_type
+        )  # TODO: max_embedding, just ignore?
         if len(valid_models) == 0:
-            raise ValueError(
-                """No valid profile found for LOWRES. Please go to the TensorRT tab and generate an engine with the necessary profile. 
+            gr.Error(
+                f"""No valid profile found for ({model_name}) LOWRES. Please go to the TensorRT tab and generate an engine with the necessary profile. 
                 If using hires.fix, you need an engine for both the base and upscaled resolutions. Otherwise, use the default (torch) U-Net."""
             )
+            return None, None
         best = idx[np.argmin(distances)]
 
         if hr_scale != 1:
             hr_w = int(p.width * p.hr_scale)
             hr_h = int(p.height * p.hr_scale)
             valid_models_hr, distances_hr, idx_hr = modelmanager.get_valid_models(
-                p.sd_model_name, hr_w, hr_h, p.batch_size, 77
+                model_name,
+                hr_w,
+                hr_h,
+                p.batch_size,
+                77,  # model_type
             )  # TODO: max_embedding
-            if len(valid_models) == 0:
-                raise ValueError(
-                    "No valid profile found for HIRES. Please go to the TensorRT tab and generate an engine with the necessary profile. If using hires.fix, you need an engine for both the base and upscaled resolutions. Otherwise, use the default (torch) U-Net."
+            if len(valid_models_hr) == 0:
+                gr.Error(
+                    f"""No valid profile found for ({model_name}) HIRES. Please go to the TensorRT tab and generate an engine with the necessary profile. 
+                    If using hires.fix, you need an engine for both the base and upscaled resolutions. Otherwise, use the default (torch) U-Net."""
                 )
             merged_idx = [i for i, id in enumerate(idx) if id in idx_hr]
             if len(merged_idx) == 0:
                 gr.Warning(
-                    "No model available for both LOWRES ({}x{}) and HIRES ({}x{}). This will slow-down inference.".format(
-                        p.width, p.height, hr_w, hr_h
+                    "No model available for both ({}) LOWRES ({}x{}) and HIRES ({}x{}). This will slow-down inference.".format(
+                        model_name, p.width, p.height, hr_w, hr_h
                     )
                 )
-                best_hr = idx_hr[np.argmin(distances_hr)]
+                return None, None
             else:
                 _distances = [distances[i] for i in merged_idx]
                 best_hr = idx_hr[merged_idx[np.argmin(_distances)]]
                 best = best_hr
-            GLOBAL_KWARGS["profile_hr_idx"] = best_hr
-        GLOBAL_KWARGS["profile_idx"] = best
-        GLOBAL_KWARGS["model_name"] = p.sd_model_name
+
+        return best, best_hr
+
+    def get_loras(self, p):
+        lora_pathes = []
+        lora_scales = []
+
+        # get lora from prompt
+        _prompt = p.prompt
+        extra_networks = re.findall("\<(.*?)\>", _prompt)
+        loras = [net for net in extra_networks if net.startswith("lora")]
+
+        # Avoid that extra networks will be loaded
+        for lora in loras:
+            _prompt = _prompt.replace(f"<{lora}>", "")
+        p.prompt = _prompt
+
+        # check if lora config has changes
+        if self.lora_hash != "".join(loras):
+            self.lora_hash = "".join(loras)
+            self.update_lora = True
+            if self.lora_hash == "":
+                GLOBAL_ARGS.lora = None
+                return
+        else:
+            return
+
+        # Get pathes
+        print("Apllying LoRAs: " + str(loras))
+        available = modelmanager.available_models()
+        for lora in loras:
+            lora_name, lora_scale = lora.split(":")[1:]
+            lora_scales.append(float(lora_scale))
+            if lora_name not in available:
+                raise Exception(
+                    f"Please export the LoRA checkpoint {lora_name} first from the TensorRT LoRA tab"
+                )
+            lora_pathes.append(
+                os.path.join(TRT_MODEL_DIR, available[lora_name][0]["filepath"])
+            )
+
+        # Merge lora refit dicts
+        base_name, base_path = modelmanager.get_onnx_path(p.sd_model_name)
+        refit_dict = apply_loras(base_path, lora_pathes, lora_scales)
+
+        GLOBAL_ARGS.lora = refit_dict
+
+    def process(self, p, *args):
+        # before unet_init
+        sd_unet_option = sd_unet.get_unet_option()
+        if sd_unet_option is None:
+            return
+
+        if not sd_unet_option.model_name == p.sd_model_name:
+            gr.Error(
+                """Selected torch model ({}) does not match the selected TensorRT U-Net ({}). 
+                Please ensure that both models are the same or select Automatic from the SD UNet dropdown.""".format(
+                    p.sd_model_name, sd_unet_option.model_name
+                )
+            )
+        GLOBAL_ARGS.idx, GLOBAL_ARGS.hr_idx = self.get_profile_idx(
+            p, p.sd_model_name, ModelType.UNET
+        )
+
+        try:
+            self.get_loras(p)
+        except Exception as e:
+            gr.Error(e)
+            raise e
 
     def process_batch(self, p, *args, **kwargs):
+        # Called for each batch count
         return super().process_batch(p, *args, **kwargs)
 
     def before_hr(self, p, *args):
-        GLOBAL_KWARGS["profile_idx"] = GLOBAL_KWARGS["profile_hr_idx"]
+        GLOBAL_ARGS.idx = GLOBAL_ARGS.hr_idx
+
         return super().before_hr(p, *args)  # 4 (Only when HR starts.....)
 
     def after_extra_networks_activate(self, p, *args, **kwargs):
-        # if self.lora_path is not None:
-        #    self.engine.refit_from_dump(self.lora_path)
-
-        # Called after UNet activate
-        # p.extra_network_data
-        # Contains dict of modules.extra_networks.ExtraNetworkParams
-        return super().after_extra_networks_activate(p, *args, **kwargs)  # 3
+        if self.update_lora:
+            self.update_lora = False
+            # Not the fastest, but safest option. Larger bottlenecks to solve first!
+            # Other two options: Overengingeer, Refit whole model
+            sd_unet.current_unet.apply_loras()
 
 
 def list_unets(l):

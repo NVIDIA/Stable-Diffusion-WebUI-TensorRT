@@ -4,9 +4,10 @@ from json import JSONEncoder
 import os
 from logging import info, warning
 from dataclasses import dataclass
+from datastructures import ModelType
 import torch
-from exporter import get_cc
 from modules import paths_internal
+import copy
 
 ONNX_MODEL_DIR = os.path.join(paths_internal.models_path, "Unet-onnx")
 if not os.path.exists(ONNX_MODEL_DIR):
@@ -18,6 +19,13 @@ LORA_MODEL_DIR = os.path.join(paths_internal.models_path, "Lora")
 NVIDIA_CACHE_URL = ""
 
 MODEL_FILE = os.path.join(TRT_MODEL_DIR, "model.json")
+
+
+def get_cc():
+    cc_major = torch.cuda.get_device_properties(0).major
+    cc_minor = torch.cuda.get_device_properties(0).minor
+    return cc_major, cc_minor
+
 
 cc_major, cc_minor = get_cc()
 
@@ -35,8 +43,8 @@ class ModelManager:
         self.update()
 
     @staticmethod
-    def get_onnx_path(model_name, model_hash):
-        onnx_filename = "_".join([model_name, model_hash]) + ".onnx"
+    def get_onnx_path(model_name):
+        onnx_filename = f"{model_name}.onnx"
         onnx_path = os.path.join(ONNX_MODEL_DIR, onnx_filename)
         return onnx_filename, onnx_path
 
@@ -57,6 +65,9 @@ class ModelManager:
 
         return trt_filename, trt_path
 
+    def get_weights_map_path(self, model_name: str):
+        return os.path.join(TRT_MODEL_DIR, f"{model_name}_weights_map.json")
+
     def update(self):
         trt_engines = [
             trt_file
@@ -64,7 +75,7 @@ class ModelManager:
             if trt_file.endswith(".trt")
         ]
 
-        tmp_all_models = self.all_models.copy()
+        tmp_all_models = copy.deepcopy(self.all_models)
         for cc, base_models in tmp_all_models.items():
             for base_model, models in base_models.items():
                 tmp_config_list = {}
