@@ -19,8 +19,6 @@ import torch
 from torch.cuda import nvtx
 from collections import OrderedDict
 import numpy as np
-import onnx
-import onnx_graphsurgeon as gs
 from polygraphy.backend.common import bytes_from_path
 from polygraphy import util
 from polygraphy.backend.trt import ModifyNetworkOutputs, Profile
@@ -32,8 +30,6 @@ from polygraphy.backend.trt import (
 )
 from polygraphy.logger import G_LOGGER
 import tensorrt as trt
-from enum import Enum, auto
-from safetensors.numpy import save_file, load_file
 from logging import error, warning
 from tqdm import tqdm
 import copy
@@ -63,33 +59,6 @@ else:
 torch_to_numpy_dtype_dict = {
     value: key for (key, value) in numpy_to_torch_dtype_dict.items()
 }
-
-
-class PIPELINE_TYPE(Enum):
-    TXT2IMG = auto()
-    IMG2IMG = auto()
-    INPAINT = auto()
-    SD_XL_BASE = auto()
-    SD_XL_REFINER = auto()
-
-    def is_txt2img(self):
-        return self == self.TXT2IMG
-
-    def is_img2img(self):
-        return self == self.IMG2IMG
-
-    def is_inpaint(self):
-        return self == self.INPAINT
-
-    def is_sd_xl_base(self):
-        return self == self.SD_XL_BASE
-
-    def is_sd_xl_refiner(self):
-        return self == self.SD_XL_REFINER
-
-    def is_sd_xl(self):
-        return self.is_sd_xl_base() or self.is_sd_xl_refiner()
-
 
 class TQDMProgressMonitor(trt.IProgressMonitor):
     def __init__(self):

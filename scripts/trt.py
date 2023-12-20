@@ -1,21 +1,23 @@
 import os
-import numpy as np
+import re
+from typing import List
 
+import numpy as np
 import torch
 from torch.cuda import nvtx
+from polygraphy.logger import G_LOGGER
+import gradio as gr
+
 from modules import script_callbacks, sd_unet, devices, scripts
 
 import ui_trt
 from utilities import Engine
-from typing import List
 from model_manager import TRT_MODEL_DIR, modelmanager
-from polygraphy.logger import G_LOGGER
-import gradio as gr
-import re
 from datastructures import UNetEngineArgs, ModelType
 from scripts.lora import apply_loras
 
 G_LOGGER.module_severity = G_LOGGER.ERROR
+GLOBAL_ARGS = UNetEngineArgs(0, 0, None, {})
 
 
 class TrtUnetOption(sd_unet.SdUnetOption):
@@ -26,9 +28,6 @@ class TrtUnetOption(sd_unet.SdUnetOption):
 
     def create_unet(self):
         return TrtUnet(self.model_name, self.configs)
-
-
-GLOBAL_ARGS = UNetEngineArgs(0, 0, None, {})
 
 
 class TrtUnet(sd_unet.SdUnet):
@@ -52,7 +51,7 @@ class TrtUnet(sd_unet.SdUnet):
             os.path.join(TRT_MODEL_DIR, self.loaded_config["filepath"])
         )
 
-    def forward(self, x, timesteps, context, *args, **kwargs):
+    def forward(self, x: torch.Tensor, timesteps: torch.Tensor, context: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         nvtx.range_push("forward")
         feed_dict = {
             "sample": x.float(),
@@ -134,7 +133,7 @@ class TensorRTScript(scripts.Script):
         # Check divisibilty
         if p.width % 64 or p.height % 64:
             gr.Error("Target resolution must be divisible by 64 in both dimensions.")
-
+        # TODO img2img has not enable hr
         if p.enable_hr:
             hr_w = int(p.width * p.hr_scale)
             hr_h = int(p.height * p.hr_scale)
@@ -143,7 +142,7 @@ class TensorRTScript(scripts.Script):
                     "HIRES Fix resolution must be divisible by 64 in both dimensions. Please change the upscale factor or disable HIRES Fix."
                 )
 
-    def get_profile_idx(self, p, model_name, model_type):
+    def get_profile_idx(self, p, model_name: str, model_type: ModelType) -> (int, int):
         best_hr = None
         hr_scale = p.hr_scale if p.enable_hr else 1
         (
@@ -282,6 +281,8 @@ class TensorRTScript(scripts.Script):
 def list_unets(l):
     model = modelmanager.available_models()
     for k, v in model.items():
+        if v[0]["config"].lora:
+            continue
         label = "{} ({})".format(k, v[0]["base_model"]) if v[0]["config"].lora else k
         l.append(TrtUnetOption(label, v))
 

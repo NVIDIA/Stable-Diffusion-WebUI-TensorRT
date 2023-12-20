@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum
-
+from json import JSONEncoder
+import torch 
 
 @dataclass
 class UNetEngineArgs:
@@ -52,7 +53,67 @@ class ModelType(Enum):
     def __str__(self):
         return self.name.lower()
 
+@dataclass
+class ModelConfig:
+    profile: dict
+    static_shapes: bool
+    fp32: bool
+    inpaint: bool
+    refit: bool
+    lora: bool
+    vram: int
+    unet_hidden_dim: int = 4
 
+    def is_compatible_from_dict(self, feed_dict: dict):
+        distance = 0
+        for k, v in feed_dict.items():
+            _min, _opt, _max = self.profile[k]
+            v_tensor = torch.Tensor(list(v.shape))
+            r_min = torch.Tensor(_max) - v_tensor
+            r_opt = (torch.Tensor(_opt) - v_tensor).abs()
+            r_max = v_tensor - torch.Tensor(_min)
+            if torch.any(r_min < 0) or torch.any(r_max < 0):
+                return (False, distance)
+            distance += r_opt.sum() + 0.5 * (r_max.sum() + 0.5 * r_min.sum())
+        return (True, distance)
+
+    def is_compatible(
+        self, width: int, height: int, batch_size: int, max_embedding: int
+    ):
+        distance = 0
+        sample = self.profile["sample"]
+        embedding = self.profile["encoder_hidden_states"]
+
+        batch_size *= 2
+        width = width // 8
+        height = height // 8
+
+        _min, _opt, _max = sample
+        if _min[0] > batch_size or _max[0] < batch_size:
+            return (False, distance)
+        if _min[2] > height or _max[2] < height:
+            return (False, distance)
+        if _min[3] > width or _max[3] < width:
+            return (False, distance)
+
+        _min_em, _opt_em, _max_em = embedding
+        if _min_em[1] > max_embedding or _max_em[1] < max_embedding:
+            return (False, distance)
+
+        distance = (
+            abs(_opt[0] - batch_size)
+            + abs(_opt[2] - height)
+            + abs(_opt[3] - width)
+            + 0.5 * (abs(_max[2] - height) + abs(_max[3] - width))
+        )
+
+        return (True, distance)
+
+
+class ModelConfigEncoder(JSONEncoder):
+    def default(self, o: ModelConfig):
+        return o.__dict__
+    
 @dataclass
 class ProfileSettings:
     bs_min: int
@@ -166,7 +227,7 @@ class ProfilePrests:
             1, 1, 4, 768, 1024, 1024, 768, 1024, 1024, 75, 75, 150
         )
 
-    def get_settings_from_version(self, version):
+    def get_settings_from_version(self, version: str):
         static = False
         if version == "Default":
             return *self.default.out(), static

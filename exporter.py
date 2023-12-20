@@ -1,29 +1,31 @@
-import torch
-import torch.nn.functional as F
-import onnx
-from logging import info, error
+import os
 import time
 import shutil
-
-from modules import sd_hijack, sd_unet, shared
-
-from utilities import Engine
-from datastructures import ProfileSettings
-from model_helper import UNetModel
-import os
-
+import json
 from pathlib import Path
+from logging import info, error
+from collections import OrderedDict
+from typing import List, Tuple
+
+import torch
+import torch.nn.functional as F
+import numpy as np
+import onnx
+from onnx import numpy_helper
 from optimum.onnx.utils import (
     _get_onnx_external_data_tensors,
     check_model_uses_external_data,
 )
-from collections import OrderedDict
-from onnx import numpy_helper
-import numpy as np
-import json
 
 
-def apply_lora(model, lora_path, inputs):
+from modules import shared
+
+from utilities import Engine
+from datastructures import ProfileSettings
+from model_helper import UNetModel
+
+
+def apply_lora(model: torch.nn.Module, lora_path: str, inputs: Tuple[torch.Tensor]) -> torch.nn.Module:
     try:
         import sys
 
@@ -40,15 +42,15 @@ def apply_lora(model, lora_path, inputs):
     lora_name = os.path.splitext(os.path.basename(lora_path))[0]
     networks.load_networks(
         [lora_name], [1.0], [1.0], [None]
-    )  # todo: UI for parameters, multiple loras -> Struct of Arrays?
+    )
 
     model.forward(*inputs)
     return model
 
 
 def get_refit_weights(
-    state_dict, onnx_opt_path, weight_name_mapping, weight_shape_mapping
-):
+    state_dict: dict, onnx_opt_path: str, weight_name_mapping: dict, weight_shape_mapping: dict
+) -> dict:
     refit_weights = OrderedDict()
     onnx_opt_dir = os.path.dirname(onnx_opt_path)
     onnx_opt_model = onnx.load(onnx_opt_path)
@@ -89,17 +91,7 @@ def export_lora(
     weights_map_path: str,
     lora_name: str,
     profile: ProfileSettings,
-):
-    def disable_checkpoint(self):
-        if getattr(self, "use_checkpoint", False) == True:
-            self.use_checkpoint = False
-        if getattr(self, "checkpoint", False) == True:
-            self.checkpoint = False
-
-    shared.sd_model.model.diffusion_model.apply(disable_checkpoint)
-    sd_unet.apply_unet("None")
-    sd_hijack.model_hijack.apply_optimizations("None")
-
+) -> dict:
     info("Exporting to ONNX...")
     inputs = modelobj.get_sample_input(
         profile.bs_opt * 2,
@@ -107,17 +99,18 @@ def export_lora(
         profile.w_opt // 8,
         profile.t_opt,
     )
-    model = shared.sd_model.model.diffusion_model
 
     with open(weights_map_path, "r") as fp_wts:
         print(f"[I] Loading weights map: {weights_map_path} ")
         [weights_name_mapping, weights_shape_mapping] = json.load(fp_wts)
 
     with torch.inference_mode(), torch.autocast("cuda"):
-        model = apply_lora(model, os.path.splitext(lora_name)[0], inputs)
+        modelobj.unet = apply_lora(
+            modelobj.unet, os.path.splitext(lora_name)[0], inputs
+        )
 
         refit_dict = get_refit_weights(
-            model.state_dict(),
+            modelobj.unet.state_dict(),
             onnx_path,
             weights_name_mapping,
             weights_shape_mapping,
@@ -126,18 +119,30 @@ def export_lora(
     return refit_dict
 
 
+def swap_sdpa(func):
+    def wrapper(*args, **kwargs):
+        swap_sdpa = hasattr(F, "scaled_dot_product_attention")
+        old_sdpa = (
+            getattr(F, "scaled_dot_product_attention", None) if swap_sdpa else None
+        )
+        if swap_sdpa:
+            delattr(F, "scaled_dot_product_attention")
+        ret = func(*args, **kwargs)
+        if swap_sdpa and old_sdpa:
+            setattr(F, "scaled_dot_product_attention", old_sdpa)
+        return ret
+
+    return wrapper
+
+
+@swap_sdpa
 def export_onnx(
     onnx_path: str,
     modelobj: UNetModel,
     profile: ProfileSettings,
-    opset=17,
-    diable_optimizations=False,
+    opset: int = 17,
+    diable_optimizations: bool = False,
 ):
-    swap_sdpa = hasattr(F, "scaled_dot_product_attention")
-    old_sdpa = getattr(F, "scaled_dot_product_attention", None) if swap_sdpa else None
-    if swap_sdpa:
-        delattr(F, "scaled_dot_product_attention")
-
     info("Exporting to ONNX...")
     inputs = modelobj.get_sample_input(
         profile.bs_opt * 2,
@@ -158,13 +163,9 @@ def export_onnx(
             modelobj.optimize if not diable_optimizations else None,
         )
 
-    # CleanUp
-    if swap_sdpa and old_sdpa:
-        setattr(F, "scaled_dot_product_attention", old_sdpa)
-
 
 def _export_onnx(
-    model, inputs, path, opset, in_names, out_names, dyn_axes, optimizer=None
+    model: torch.nn.Module, inputs: Tuple[torch.Tensor], path: str, opset: int, in_names: List[str], out_names: List[str], dyn_axes: dict, optimizer=None
 ):
     tmp_dir = os.path.abspath("onnx_tmp")
     os.makedirs(tmp_dir, exist_ok=True)
@@ -219,7 +220,7 @@ def _export_onnx(
     shutil.rmtree(tmp_dir)
 
 
-def export_trt(trt_path, onnx_path, timing_cache, profile, use_fp16):
+def export_trt(trt_path: str, onnx_path: str, timing_cache: str, profile: dict, use_fp16: bool):
     engine = Engine(trt_path)
 
     # TODO Still approx. 2gb of VRAM unaccounted for...

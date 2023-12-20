@@ -1,34 +1,30 @@
 import os
+import gc
+import json
+import logging
+from collections import defaultdict
 
+import torch
+from safetensors.torch import save_file
 import gradio as gr
-from modules.call_queue import wrap_gradio_gpu_call
+
 from modules.shared import cmd_opts
 from modules.ui_components import FormRow
-from modules import sd_hijack, sd_unet, sd_models, shared
+from modules import sd_hijack, sd_models, shared
 from modules.ui_common import refresh_symbol
 from modules.ui_components import ToolButton
 
-from exporter import export_onnx, export_trt, export_lora
-from utilities import Engine
-from safetensors.torch import save_file
-
-
-import logging
-import gc
-import torch
-from collections import defaultdict
-import json
-
 from model_helper import UNetModel
+from exporter import export_onnx, export_trt, export_lora
 from model_manager import modelmanager, cc_major, TRT_MODEL_DIR
 from datastructures import SDVersion, ProfilePrests, ProfileSettings
+
 
 profile_presets = ProfilePrests()
 
 logging.basicConfig(level=logging.INFO)
 
 
-# TODO get info from model config
 def get_context_dim():
     if shared.sd_model.is_sd1:
         return 768
@@ -63,14 +59,6 @@ def export_unet_to_trt(
     static_shapes,
     preset,
 ):
-    def disable_checkpoint(self):
-        if getattr(self, "use_checkpoint", False) == True:
-            self.use_checkpoint = False
-        if getattr(self, "checkpoint", False) == True:
-            self.checkpoint = False
-
-    shared.sd_model.model.diffusion_model.apply(disable_checkpoint)
-    sd_unet.apply_unet("None")
     sd_hijack.model_hijack.apply_optimizations("None")
 
     is_xl = shared.sd_model.is_sdxl
@@ -112,6 +100,7 @@ def export_unet_to_trt(
         text_minlen=profile_settings.t_min,
         is_xl=is_xl,
     )
+    modelobj.apply_torch_model()
 
     profile = modelobj.get_input_profile(profile_settings)
     export_onnx(
@@ -134,8 +123,6 @@ def export_unet_to_trt(
         gr.Info(
             "Building TensorRT engine... This can take a while, please check the progress in the terminal."
         )
-        gc.collect()
-        torch.cuda.empty_cache()
         ret = export_trt(
             trt_path,
             onnx_path,
@@ -153,10 +140,10 @@ def export_unet_to_trt(
             profile,
             static_shapes,
             fp32=use_fp32,
-            inpaint=False,  # TODO
+            inpaint=True if modelobj.in_channels == 6 else False,
             refit=True,
             vram=0,
-            unet_hidden_dim=4,  # TODO
+            unet_hidden_dim=modelobj.in_channels,
             lora=False,
         )
     else:
@@ -204,22 +191,13 @@ def export_lora_to_trt(lora_name, force_export):
 
     embedding_dim = get_context_dim()
 
-    def disable_checkpoint(self):
-        if getattr(self, "use_checkpoint", False) == True:
-            self.use_checkpoint = False
-        if getattr(self, "checkpoint", False) == True:
-            self.checkpoint = False
-
-    shared.sd_model.model.diffusion_model.apply(disable_checkpoint)
-    sd_unet.apply_unet("None")
-    sd_hijack.model_hijack.apply_optimizations("None")
-
     modelobj = UNetModel(
         shared.sd_model.model.diffusion_model,
         embedding_dim,
         text_minlen=profile_settings.t_min,
         is_xl=is_xl,
     )
+    modelobj.apply_torch_model()
 
     weights_map_path = modelmanager.get_weights_map_path(model_name)
     if not os.path.exists(weights_map_path):
@@ -458,7 +436,7 @@ def on_ui_tabs():
                                     elem_id="trt_static_shapes",
                                 )
 
-                            with gr.Column(elem_id="trt_max_batch"):
+                            with gr.Column(elem_id="trt_batch"):
                                 trt_min_batch = gr.Slider(
                                     minimum=1,
                                     maximum=16,

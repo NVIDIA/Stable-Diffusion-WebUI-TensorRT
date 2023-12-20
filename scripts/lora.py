@@ -1,14 +1,14 @@
 import os
 from typing import List
+
 import numpy as np
-from safetensors.torch import load_file
-import onnx_graphsurgeon as gs
-import onnx
 import torch
+from safetensors.torch import load_file
+import onnx
 from onnx import numpy_helper
 
 
-def merge_loras(loras: List[str], scales: List[str]):
+def merge_loras(loras: List[str], scales: List[str]) -> dict:
     refit_dict = {}
     for lora, scale in zip(loras, scales):
         lora_dict = load_file(lora)

@@ -15,22 +15,27 @@
 # limitations under the License.
 #
 
+import os
+import json
+import tempfile
+from typing import List, Tuple
+
+import torch
+import numpy as np
 import onnx
 from onnx import shape_inference, numpy_helper
-import os
-from polygraphy.backend.onnx.loader import fold_constants
-import tempfile
-import torch
-import torch.nn.functional as F
 import onnx_graphsurgeon as gs
-from datastructures import ProfileSettings
+from polygraphy.backend.onnx.loader import fold_constants
 
-import numpy as np
-import json
+from modules import sd_hijack, sd_unet
+
+from datastructures import ProfileSettings
 
 
 class UNetModel(torch.nn.Module):
-    def __init__(self, unet, embedding_dim, text_minlen=77, is_xl=False) -> None:
+    def __init__(
+        self, unet, embedding_dim: int, text_minlen: int = 77, is_xl: bool = False
+    ) -> None:
         super().__init__()
         self.unet = unet
         self.is_xl = is_xl
@@ -39,6 +44,7 @@ class UNetModel(torch.nn.Module):
         self.embedding_dim = embedding_dim
         self.num_xl_classes = 2816  # Magic number for num_classes
         self.emb_chn = 1280
+        self.in_channels = self.unet.in_channels
 
         self.dyn_axes = {
             "sample": {0: "2B", 2: "H", 3: "W"},
@@ -48,33 +54,48 @@ class UNetModel(torch.nn.Module):
             "y": {0: "2B"},
         }
 
-    def get_input_names(self):
+    def apply_torch_model(self):
+        def disable_checkpoint(self):
+            if getattr(self, "use_checkpoint", False) == True:
+                self.use_checkpoint = False
+            if getattr(self, "checkpoint", False) == True:
+                self.checkpoint = False
+
+        self.unet.apply(disable_checkpoint)
+        self.set_unet("None")
+
+    def set_unet(self, ckpt: str):
+        # TODO test if using this with TRT works
+        sd_unet.apply_unet(ckpt)
+        sd_hijack.model_hijack.apply_optimizations(ckpt)
+
+    def get_input_names(self) -> List[str]:
         names = ["sample", "timesteps", "encoder_hidden_states"]
         if self.is_xl:
             names.append("y")
         return names
 
-    def get_output_names(self):
+    def get_output_names(self) -> List[str]:
         return ["latent"]
 
-    def get_dynamic_axes(self):
+    def get_dynamic_axes(self) -> dict:
         io_names = self.get_input_names() + self.get_output_names()
         dyn_axes = {name: self.dyn_axes[name] for name in io_names}
         return dyn_axes
 
     def get_sample_input(
         self,
-        batch_size,
-        latent_height,
-        latent_width,
-        text_len,
-        device="cuda",
-        dtype=torch.float32,
-    ):
+        batch_size: int,
+        latent_height: int,
+        latent_width: int,
+        text_len: int,
+        device: str = "cuda",
+        dtype: torch.dtype = torch.float32,
+    ) -> Tuple[torch.Tensor]:
         return (
             torch.randn(
                 batch_size,
-                self.unet.in_channels,
+                self.in_channels,
                 latent_height,
                 latent_width,
                 dtype=dtype,
@@ -93,7 +114,7 @@ class UNetModel(torch.nn.Module):
             else None,
         )
 
-    def get_input_profile(self, profile: ProfileSettings):
+    def get_input_profile(self, profile: ProfileSettings) -> dict:
         min_batch, opt_batch, max_batch = profile.get_a1111_batch_dim()
         (
             min_latent_height,
@@ -127,7 +148,7 @@ class UNetModel(torch.nn.Module):
         return shape_dict
 
     # Helper utility for weights map
-    def export_weights_map(self, onnx_opt_path, weights_map_path):
+    def export_weights_map(self, onnx_opt_path: str, weights_map_path: dict):
         onnx_opt_dir = onnx_opt_path
         state_dict = self.unet.state_dict()
         onnx_opt_model = onnx.load(onnx_opt_path)
