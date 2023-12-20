@@ -1,14 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum
 from json import JSONEncoder
-import torch 
-
-@dataclass
-class UNetEngineArgs:
-    idx: int
-    hr_idx: int = None
-    lora: dict = None
-    controlnets: dict = None
+import torch
 
 
 class SDVersion(Enum):
@@ -52,6 +45,7 @@ class ModelType(Enum):
 
     def __str__(self):
         return self.name.lower()
+
 
 @dataclass
 class ModelConfig:
@@ -113,7 +107,8 @@ class ModelConfig:
 class ModelConfigEncoder(JSONEncoder):
     def default(self, o: ModelConfig):
         return o.__dict__
-    
+
+
 @dataclass
 class ProfileSettings:
     bs_min: int

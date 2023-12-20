@@ -8,16 +8,15 @@ from torch.cuda import nvtx
 from polygraphy.logger import G_LOGGER
 import gradio as gr
 
-from modules import script_callbacks, sd_unet, devices, scripts
+from modules import script_callbacks, sd_unet, devices, scripts, shared
 
 import ui_trt
 from utilities import Engine
 from model_manager import TRT_MODEL_DIR, modelmanager
-from datastructures import UNetEngineArgs, ModelType
+from datastructures import ModelType
 from scripts.lora import apply_loras
 
 G_LOGGER.module_severity = G_LOGGER.ERROR
-GLOBAL_ARGS = UNetEngineArgs(0, 0, None, {})
 
 
 class TrtUnetOption(sd_unet.SdUnetOption):
@@ -38,20 +37,22 @@ class TrtUnet(sd_unet.SdUnet):
         self.model_name = model_name
         self.configs = configs
 
-        self.profile_idx = GLOBAL_ARGS.idx
-        if self.profile_idx is None:
-            self.profile_idx = 0
-        self.loaded_config = self.configs[self.profile_idx]
+        self.profile_idx = 0
+        self.loaded_config = None
 
         self.engine_vram_req = 0
-        self.shape_hash = 0
         self.refitted_keys = set()
 
-        self.engine = Engine(
-            os.path.join(TRT_MODEL_DIR, self.loaded_config["filepath"])
-        )
+        self.engine = None
 
-    def forward(self, x: torch.Tensor, timesteps: torch.Tensor, context: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        timesteps: torch.Tensor,
+        context: torch.Tensor,
+        *args,
+        **kwargs,
+    ) -> torch.Tensor:
         nvtx.range_push("forward")
         feed_dict = {
             "sample": x.float(),
@@ -60,9 +61,6 @@ class TrtUnet(sd_unet.SdUnet):
         }
         if "y" in kwargs:
             feed_dict["y"] = kwargs["y"].float()
-
-        if not self.profile_idx == GLOBAL_ARGS.idx:
-            self.switch_engine()
 
         tmp = torch.empty(
             self.engine_vram_req, dtype=torch.uint8, device=devices.device
@@ -76,11 +74,7 @@ class TrtUnet(sd_unet.SdUnet):
         nvtx.range_pop()
         return out
 
-    def apply_loras(self):
-        if GLOBAL_ARGS.lora is None:
-            refit_dict = {}
-        else:
-            refit_dict = GLOBAL_ARGS.lora
+    def apply_loras(self, refit_dict: dict):
         if not self.refitted_keys.issubset(set(refit_dict.keys())):
             # Need to ensure that weights that have been modified before and are not present anymore are reset.
             self.refitted_keys = set()
@@ -89,20 +83,17 @@ class TrtUnet(sd_unet.SdUnet):
         self.engine.refit_from_dict(refit_dict, is_fp16=True)
         self.refitted_keys = set(refit_dict.keys())
 
-    def set_idx(self):
-        if GLOBAL_ARGS.idx is None:
-            raise Exception("No valid profile found. Please generate a profile first.")
-        self.profile_idx = GLOBAL_ARGS.idx
-
     def switch_engine(self):
-        self.set_idx()
         self.loaded_config = self.configs[self.profile_idx]
         self.engine.reset(os.path.join(TRT_MODEL_DIR, self.loaded_config["filepath"]))
         self.activate()
-        self.shape_hash = 0
 
     def activate(self):
-        self.shape_hash = 0
+        self.loaded_config = self.configs[self.profile_idx]
+        if self.engine is None:
+            self.engine = Engine(
+                os.path.join(TRT_MODEL_DIR, self.loaded_config["filepath"])
+            )
         self.engine.load()
         print(f"\nLoaded Profile: {self.profile_idx}")
         print(self.engine)
@@ -110,7 +101,6 @@ class TrtUnet(sd_unet.SdUnet):
         self.engine.activate(True)
 
     def deactivate(self):
-        self.shape_hash = 0
         del self.engine
 
 
@@ -119,6 +109,10 @@ class TensorRTScript(scripts.Script):
         self.loaded_model = None
         self.lora_hash = ""
         self.update_lora = False
+        self.lora_refit_dict = {}
+        self.idx = None
+        self.hr_idx = None
+        self.torch_unet = False
 
     def title(self):
         return "TensorRT"
@@ -133,7 +127,9 @@ class TensorRTScript(scripts.Script):
         # Check divisibilty
         if p.width % 64 or p.height % 64:
             gr.Error("Target resolution must be divisible by 64 in both dimensions.")
-        # TODO img2img has not enable hr
+
+        if self.is_img2img:
+            return
         if p.enable_hr:
             hr_w = int(p.width * p.hr_scale)
             hr_h = int(p.height * p.hr_scale)
@@ -144,7 +140,11 @@ class TensorRTScript(scripts.Script):
 
     def get_profile_idx(self, p, model_name: str, model_type: ModelType) -> (int, int):
         best_hr = None
-        hr_scale = p.hr_scale if p.enable_hr else 1
+
+        if self.is_img2img:
+            hr_scale = 1
+        else:
+            hr_scale = p.hr_scale if p.enable_hr else 1
         (
             valid_models,
             distances,
@@ -163,6 +163,7 @@ class TensorRTScript(scripts.Script):
             )
             return None, None
         best = idx[np.argmin(distances)]
+        best_hr = best
 
         if hr_scale != 1:
             hr_w = int(p.width * p.hr_scale)
@@ -213,7 +214,7 @@ class TensorRTScript(scripts.Script):
             self.lora_hash = "".join(loras)
             self.update_lora = True
             if self.lora_hash == "":
-                GLOBAL_ARGS.lora = None
+                self.lora_refit_dict = {}
                 return
         else:
             return
@@ -236,7 +237,7 @@ class TensorRTScript(scripts.Script):
         base_name, base_path = modelmanager.get_onnx_path(p.sd_model_name)
         refit_dict = apply_loras(base_path, lora_pathes, lora_scales)
 
-        GLOBAL_ARGS.lora = refit_dict
+        self.lora_refit_dict = refit_dict
 
     def process(self, p, *args):
         # before unet_init
@@ -251,31 +252,68 @@ class TensorRTScript(scripts.Script):
                     p.sd_model_name, sd_unet_option.model_name
                 )
             )
-        GLOBAL_ARGS.idx, GLOBAL_ARGS.hr_idx = self.get_profile_idx(
-            p, p.sd_model_name, ModelType.UNET
-        )
+        self.idx, self.hr_idx = self.get_profile_idx(p, p.sd_model_name, ModelType.UNET)
+        self.torch_unet = self.idx is None or self.hr_idx is None
 
         try:
-            self.get_loras(p)
+            if not self.torch_unet:
+                self.get_loras(p)
         except Exception as e:
             gr.Error(e)
             raise e
 
+        self.apply_unet(sd_unet_option)
+
+    def apply_unet(self, sd_unet_option):
+        if (
+            sd_unet_option == sd_unet.current_unet_option
+            and sd_unet.current_unet is not None
+            and not self.torch_unet
+        ):
+            return
+
+        if sd_unet.current_unet is not None:
+            sd_unet.current_unet.deactivate()
+
+        if self.torch_unet:
+            gr.Warning("Enabling PyTorch fallback as no engine was found.")
+            sd_unet.current_unet = None
+            sd_unet.current_unet_option = sd_unet_option
+            shared.sd_model.model.diffusion_model.to(devices.device)
+            return
+        else:
+            shared.sd_model.model.diffusion_model.to(devices.cpu)
+            devices.torch_gc()
+            if self.lora_refit_dict:
+                self.update_lora = True
+        sd_unet.current_unet = sd_unet_option.create_unet()
+        sd_unet.current_unet.profile_idx = self.idx
+        sd_unet.current_unet.option = sd_unet_option
+        sd_unet.current_unet_option = sd_unet_option
+
+        print(f"Activating unet: {sd_unet.current_unet.option.label}")
+        sd_unet.current_unet.activate()
+
     def process_batch(self, p, *args, **kwargs):
         # Called for each batch count
-        return super().process_batch(p, *args, **kwargs)
+        if self.torch_unet:
+            return super().process_batch(p, *args, **kwargs)
+
+        if self.idx != sd_unet.current_unet.profile_idx:
+            sd_unet.current_unet.profile_idx = self.idx
+            sd_unet.current_unet.switch_engine()
 
     def before_hr(self, p, *args):
-        GLOBAL_ARGS.idx = GLOBAL_ARGS.hr_idx
+        if self.idx != self.hr_idx:
+            sd_unet.current_unet.profile_idx = self.hr_idx
+            sd_unet.current_unet.switch_engine()
 
         return super().before_hr(p, *args)  # 4 (Only when HR starts.....)
 
     def after_extra_networks_activate(self, p, *args, **kwargs):
-        if self.update_lora:
+        if self.update_lora and not self.torch_unet:
             self.update_lora = False
-            # Not the fastest, but safest option. Larger bottlenecks to solve first!
-            # Other two options: Overengingeer, Refit whole model
-            sd_unet.current_unet.apply_loras()
+            sd_unet.current_unet.apply_loras(self.lora_refit_dict)
 
 
 def list_unets(l):
