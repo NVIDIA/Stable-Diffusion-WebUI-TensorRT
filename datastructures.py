@@ -219,7 +219,7 @@ class ProfilePrests:
             1, 1, 4, 512, 512, 768, 512, 512, 768, 75, 75, 150
         )
         self.default_xl = ProfileSettings(
-            1, 1, 4, 768, 1024, 1024, 768, 1024, 1024, 75, 75, 150
+            1, 1, 1, 1024, 1024, 1024, 1024, 1024, 1024, 75, 75, 75
         )
 
     def get_settings_from_version(self, version: str):
