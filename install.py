@@ -6,28 +6,34 @@ python = sys.executable
 
 
 def install():
-    import torch
-
-    if not torch.cuda.is_available():
-        print(
-            "Torch CUDA is not available! Please install Torch with CUDA and try again."
-        )
-        return
-
     if launch.is_installed("tensorrt"):
         if not version("tensorrt") == "9.0.1.post11.dev4":
-            print("Removing old TensorRT package and try reinstalling...")
             launch.run(
-                f'"{python}" -m pip uninstall -y tensorrt',
+                ["python", "-m", "pip", "uninstall", "-y", "tensorrt"],
                 "removing old version of tensorrt",
             )
 
     if not launch.is_installed("tensorrt"):
+        print("TensorRT is not installed! Installing...")
         launch.run_pip(
-            "install --pre --extra-index-url https://pypi.nvidia.com  --no-cache-dir --no-deps tensorrt==9.0.1.post11.dev4",
+            "install nvidia-cudnn-cu11==8.9.4.25 --no-cache-dir", "nvidia-cudnn-cu11"
+        )
+        launch.run_pip(
+            "install --pre --extra-index-url https://pypi.nvidia.com tensorrt==9.0.1.post11.dev4 --no-cache-dir",
             "tensorrt",
             live=True,
         )
+        launch.run(
+            ["python", "-m", "pip", "uninstall", "-y", "nvidia-cudnn-cu11"],
+            "removing nvidia-cudnn-cu11",
+        )
+
+    if launch.is_installed("nvidia-cudnn-cu11"):
+        if version("nvidia-cudnn-cu11") == "8.9.4.25":
+            launch.run(
+                ["python", "-m", "pip", "uninstall", "-y", "nvidia-cudnn-cu11"],
+                "removing nvidia-cudnn-cu11",
+            )
 
     # Polygraphy
     if not launch.is_installed("polygraphy"):
