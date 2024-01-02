@@ -175,6 +175,15 @@ class ModelManager:
         available = self.all_models.get(self.cc, {})
         return available
 
+    def available_loras(self):
+        available = {}
+        for p in os.listdir(TRT_MODEL_DIR):
+            if not p.endswith(".lora"):
+                continue
+            available[os.path.splitext(p)[0]] = os.path.join(TRT_MODEL_DIR, p)
+
+        return available
+
     def get_timing_cache(self):
         current_dir = os.path.dirname(os.path.abspath(__file__))
         cache = os.path.join(

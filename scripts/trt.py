@@ -190,7 +190,7 @@ class TensorRTScript(scripts.Script):
                 return None, None
             else:
                 _distances = [distances[i] for i in merged_idx]
-                best_hr = idx_hr[merged_idx[np.argmin(_distances)]]
+                best_hr = merged_idx[np.argmin(_distances)]
                 best = best_hr
 
         return best, best_hr
@@ -221,7 +221,7 @@ class TensorRTScript(scripts.Script):
 
         # Get pathes
         print("Apllying LoRAs: " + str(loras))
-        available = modelmanager.available_models()
+        available = modelmanager.available_loras()
         for lora in loras:
             lora_name, lora_scale = lora.split(":")[1:]
             lora_scales.append(float(lora_scale))
@@ -230,7 +230,7 @@ class TensorRTScript(scripts.Script):
                     f"Please export the LoRA checkpoint {lora_name} first from the TensorRT LoRA tab"
                 )
             lora_pathes.append(
-                os.path.join(TRT_MODEL_DIR, available[lora_name][0]["filepath"])
+                available[lora_name]
             )
 
         # Merge lora refit dicts
