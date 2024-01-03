@@ -2,6 +2,7 @@ import os
 from typing import List
 
 import numpy as np
+import cupy
 import torch
 from safetensors.torch import load_file
 import onnx
@@ -14,9 +15,9 @@ def merge_loras(loras: List[str], scales: List[str]) -> dict:
         lora_dict = load_file(lora)
         for k, v in lora_dict.items():
             if k in refit_dict:
-                refit_dict[k] += scale * v
+                refit_dict[k] += scale * cupy.array(v)
             else:
-                refit_dict[k] = scale * v
+                refit_dict[k] = scale * cupy.array(v)
     return refit_dict
 
 
