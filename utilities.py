@@ -15,32 +15,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-
+import torch
+from torch.cuda import nvtx
 from collections import OrderedDict
 import numpy as np
-import onnx
-import onnx_graphsurgeon as gs
 from polygraphy.backend.common import bytes_from_path
 from polygraphy import util
-from polygraphy.backend.trt import CreateConfig, ModifyNetworkOutputs, Profile
+from polygraphy.backend.trt import ModifyNetworkOutputs, Profile
 from polygraphy.backend.trt import (
     engine_from_bytes,
     engine_from_network,
     network_from_onnx_path,
     save_engine,
 )
+from polygraphy.logger import G_LOGGER
 import tensorrt as trt
-import torch
-from torch.cuda import nvtx
-from enum import Enum, auto
-from safetensors.numpy import save_file, load_file
 from logging import error, warning
-import os
-import sys
 from tqdm import tqdm
-import copy 
+import copy
 
 TRT_LOGGER = trt.Logger(trt.Logger.ERROR)
+G_LOGGER.module_severity = G_LOGGER.ERROR
 
 # Map of numpy dtype -> torch dtype
 numpy_to_torch_dtype_dict = {
@@ -64,33 +59,6 @@ else:
 torch_to_numpy_dtype_dict = {
     value: key for (key, value) in numpy_to_torch_dtype_dict.items()
 }
-
-
-class PIPELINE_TYPE(Enum):
-    TXT2IMG = auto()
-    IMG2IMG = auto()
-    INPAINT = auto()
-    SD_XL_BASE = auto()
-    SD_XL_REFINER = auto()
-
-    def is_txt2img(self):
-        return self == self.TXT2IMG
-
-    def is_img2img(self):
-        return self == self.IMG2IMG
-
-    def is_inpaint(self):
-        return self == self.INPAINT
-
-    def is_sd_xl_base(self):
-        return self == self.SD_XL_BASE
-
-    def is_sd_xl_refiner(self):
-        return self == self.SD_XL_REFINER
-
-    def is_sd_xl(self):
-        return self.is_sd_xl_base() or self.is_sd_xl_refiner()
-
 
 class TQDMProgressMonitor(trt.IProgressMonitor):
     def __init__(self):
@@ -181,152 +149,55 @@ class Engine:
         del self.buffers
         del self.tensors
 
-    def refit(self, onnx_path, onnx_refit_path, dump_refit_path=None):
-        def convert_int64(arr):
-            # TODO: smarter conversion
-            if len(arr.shape) == 0:
-                return np.int32(arr)
-            return arr
+    def reset(self, engine_path=None):
+        del self.engine
+        del self.context
+        del self.buffers
+        del self.tensors
+        self.engine_path = engine_path
 
-        def add_to_map(refit_dict, name, values):
-            if name in refit_dict:
-                assert refit_dict[name] is None
-                if values.dtype == np.int64:
-                    values = convert_int64(values)
-                refit_dict[name] = values
+        self.buffers = OrderedDict()
+        self.tensors = OrderedDict()
+        self.inputs = {}
+        self.outputs = {}
 
-        print(f"Refitting TensorRT engine with {onnx_refit_path} weights")
-        refit_nodes = gs.import_onnx(onnx.load(onnx_refit_path)).toposort().nodes
-
-        # Construct mapping from weight names in refit model -> original model
-        name_map = {}
-        for n, node in enumerate(gs.import_onnx(onnx.load(onnx_path)).toposort().nodes):
-            refit_node = refit_nodes[n]
-            assert node.op == refit_node.op
-            # Constant nodes in ONNX do not have inputs but have a constant output
-            if node.op == "Constant":
-                name_map[refit_node.outputs[0].name] = node.outputs[0].name
-            # Handle scale and bias weights
-            elif node.op == "Conv":
-                if node.inputs[1].__class__ == gs.Constant:
-                    name_map[refit_node.name + "_TRTKERNEL"] = node.name + "_TRTKERNEL"
-                if node.inputs[2].__class__ == gs.Constant:
-                    name_map[refit_node.name + "_TRTBIAS"] = node.name + "_TRTBIAS"
-            # For all other nodes: find node inputs that are initializers (gs.Constant)
-            else:
-                for i, inp in enumerate(node.inputs):
-                    if inp.__class__ == gs.Constant:
-                        name_map[refit_node.inputs[i].name] = inp.name
-
-        def map_name(name):
-            if name in name_map:
-                return name_map[name]
-            return name
-
-        # Construct refit dictionary
-        refit_dict = {}
+    def refit_from_dict(self, refit_weights, is_fp16):
+        # Initialize refitter
         refitter = trt.Refitter(self.engine, TRT_LOGGER)
-        all_weights = refitter.get_all()
-        for layer_name, role in zip(all_weights[0], all_weights[1]):
-            # for specialized roles, use a unique name in the map:
-            if role == trt.WeightsRole.KERNEL:
-                name = layer_name + "_TRTKERNEL"
-            elif role == trt.WeightsRole.BIAS:
-                name = layer_name + "_TRTBIAS"
-            else:
-                name = layer_name
 
-            assert name not in refit_dict, "Found duplicate layer: " + name
-            refit_dict[name] = None
-
-        for n in refit_nodes:
-            # Constant nodes in ONNX do not have inputs but have a constant output
-            if n.op == "Constant":
-                name = map_name(n.outputs[0].name)
-                print(f"Add Constant {name}\n")
-                try:
-                    add_to_map(refit_dict, name, n.outputs[0].values)
-                except:
-                    error(f"Failed to add Constant {name}\n")
-
-            # Handle scale and bias weights
-            elif n.op == "Conv":
-                if n.inputs[1].__class__ == gs.Constant:
-                    name = map_name(n.name + "_TRTKERNEL")
-                    try:
-                        add_to_map(refit_dict, name, n.inputs[1].values)
-                    except:
-                        error(f"Failed to add Conv {name}\n")
-
-                if n.inputs[2].__class__ == gs.Constant:
-                    name = map_name(n.name + "_TRTBIAS")
-                    try:
-                        add_to_map(refit_dict, name, n.inputs[2].values)
-                    except:
-                        error(f"Failed to add Conv {name}\n")
-
-            # For all other nodes: find node inputs that are initializers (AKA gs.Constant)
-            else:
-                for inp in n.inputs:
-                    name = map_name(inp.name)
-                    if inp.__class__ == gs.Constant:
-                        add_to_map(refit_dict, name, inp.values)
-
-        if dump_refit_path is not None:
-            print("Finished refit. Dumping result to disk.")
-            save_file(
-                refit_dict, dump_refit_path
-            )  # TODO need to come up with delta system to save only changed weights
-            return
-
-        for layer_name, weights_role in zip(all_weights[0], all_weights[1]):
-            if weights_role == trt.WeightsRole.KERNEL:
-                custom_name = layer_name + "_TRTKERNEL"
-            elif weights_role == trt.WeightsRole.BIAS:
-                custom_name = layer_name + "_TRTBIAS"
-            else:
-                custom_name = layer_name
-
-            # Skip refitting Trilu for now; scalar weights of type int64 value 1 - for clip model
-            if layer_name.startswith("onnx::Trilu"):
+        refitted_weights = set()
+        # iterate through all tensorrt refittable weights
+        for trt_weight_name in refitter.get_all_weights():
+            if trt_weight_name not in refit_weights:
                 continue
 
-            if refit_dict[custom_name] is not None:
-                refitter.set_weights(layer_name, weights_role, refit_dict[custom_name])
-            else:
-                print(f"[W] No refit weights for layer: {layer_name}")
+            # get weight from state dict
+            trt_datatype = trt.DataType.FLOAT
+            if is_fp16:
+                refit_weights[trt_weight_name] = refit_weights[trt_weight_name].half()
+                trt_datatype = trt.DataType.HALF
 
+            # trt.Weight and trt.TensorLocation
+            refit_weights[trt_weight_name] = refit_weights[trt_weight_name].cpu()
+            trt_wt_tensor = trt.Weights(
+                trt_datatype,
+                refit_weights[trt_weight_name].data_ptr(),
+                torch.numel(refit_weights[trt_weight_name]),
+            )
+            trt_wt_location = (
+                trt.TensorLocation.DEVICE
+                if refit_weights[trt_weight_name].is_cuda
+                else trt.TensorLocation.HOST
+            )
+
+            # apply refit
+            # refitter.set_named_weights(trt_weight_name, trt_wt_tensor, trt_wt_location)
+            refitter.set_named_weights(trt_weight_name, trt_wt_tensor)
+            refitted_weights.add(trt_weight_name)
+
+        assert set(refitted_weights) == set(refit_weights.keys())
         if not refitter.refit_cuda_engine():
-            print("Failed to refit!")
-            exit(0)
-
-    def refit_from_dump(self, dump_refit_path):
-        refit_dict = load_file(
-            dump_refit_path
-        )  # TODO if deltas are used needs to be unpacked here
-
-        refitter = trt.Refitter(self.engine, TRT_LOGGER)
-        all_weights = refitter.get_all()
-
-        for layer_name, weights_role in zip(all_weights[0], all_weights[1]):
-            if weights_role == trt.WeightsRole.KERNEL:
-                custom_name = layer_name + "_TRTKERNEL"
-            elif weights_role == trt.WeightsRole.BIAS:
-                custom_name = layer_name + "_TRTBIAS"
-            else:
-                custom_name = layer_name
-
-            # Skip refitting Trilu for now; scalar weights of type int64 value 1 - for clip model
-            if layer_name.startswith("onnx::Trilu"):
-                continue
-
-            if refit_dict[custom_name] is not None:
-                refitter.set_weights(layer_name, weights_role, refit_dict[custom_name])
-            else:
-                print(f"[W] No refit weights for layer: {layer_name}")
-
-        if not refitter.refit_cuda_engine():
-            print("Failed to refit!")
+            print("Error: failed to refit new weights.")
             exit(0)
 
     def build(
@@ -386,18 +257,11 @@ class Engine:
         profiles = copy.deepcopy(p)
         for profile in profiles:
             # Last profile is used for set_calibration_profile.
-            calib_profile = profile.fill_defaults(network[1]).to_trt(builder, network[1])
+            calib_profile = profile.fill_defaults(network[1]).to_trt(
+                builder, network[1]
+            )
             config.add_optimization_profile(calib_profile)
 
-
-        # config = CreateConfig(
-        #     fp16=fp16,
-        #     refittable=enable_refit,
-        #     profiles=p,
-        #     load_timing_cache=timing_cache,
-        #     profiling_verbosity=trt.ProfilingVerbosity.DEFAULT,
-        #     **config_kwargs,
-        # )
         try:
             engine = engine_from_network(
                 network,
@@ -460,7 +324,6 @@ class Engine:
     def __str__(self):
         out = ""
         for opt_profile in range(self.engine.num_optimization_profiles):
-            out += f"Profile {opt_profile}:\n"
             for binding_idx in range(self.engine.num_bindings):
                 name = self.engine.get_binding_name(binding_idx)
                 shape = self.engine.get_profile_shape(opt_profile, name)
