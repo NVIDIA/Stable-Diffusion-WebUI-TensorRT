@@ -1,4 +1,5 @@
 import launch
+import subprocess
 import sys
 from importlib_metadata import version
 
@@ -23,17 +24,11 @@ def install():
             "tensorrt",
             live=True,
         )
-        launch.run(
-            ["python", "-m", "pip", "uninstall", "-y", "nvidia-cudnn-cu11"],
-            "removing nvidia-cudnn-cu11",
-        )
 
-    if launch.is_installed("nvidia-cudnn-cu11"):
-        if version("nvidia-cudnn-cu11") == "8.9.4.25":
-            launch.run(
-                ["python", "-m", "pip", "uninstall", "-y", "nvidia-cudnn-cu11"],
-                "removing nvidia-cudnn-cu11",
-            )
+    uninstall_package(
+        "nvidia-cudnn-cu11",
+        "removing nvidia-cudnn-cu11",
+    )
 
     # Polygraphy
     if not launch.is_installed("polygraphy"):
@@ -62,6 +57,15 @@ def install():
             "optimum",
             live=True,
         )
+
+
+def uninstall_package(package, description):
+    print(description)
+    try:
+        subprocess.run(["python", "-m", "pip", "uninstall", "-y", package], check=True)
+        print(f"Successfully uninstalled {package}")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to uninstall {package}: {e}")
 
 
 install()
