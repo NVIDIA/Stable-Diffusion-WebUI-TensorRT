@@ -67,5 +67,4 @@ def uninstall_package(package, description):
     except subprocess.CalledProcessError as e:
         print(f"Failed to uninstall {package}: {e}")
 
-
 install()
