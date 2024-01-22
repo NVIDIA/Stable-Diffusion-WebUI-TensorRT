@@ -169,7 +169,7 @@ def export_lora_to_trt(lora_name, force_export):
     version = lora_model.get("version", SDVersion.Unknown)
     if version == SDVersion.Unknown:
         print(
-            "LoRA SD version couldm't be determined. Please ensure the correct SD Checkpoint is selected."
+            "LoRA SD version couldn't be determined. Please ensure the correct SD Checkpoint is selected."
         )
 
     model_name = shared.sd_model.sd_checkpoint_info.model_name
