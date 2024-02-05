@@ -296,7 +296,7 @@ class TensorRTScript(scripts.Script):
 
     def process_batch(self, p, *args, **kwargs):
         # Called for each batch count
-        if self.torch_unet or not sd_unet.current_unet:
+        if self.torch_unet:
             return super().process_batch(p, *args, **kwargs)
 
         if self.idx != sd_unet.current_unet.profile_idx:
