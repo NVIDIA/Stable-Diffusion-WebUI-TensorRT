@@ -299,7 +299,7 @@ class TensorRTScript(scripts.Script):
         if self.torch_unet:
             return super().process_batch(p, *args, **kwargs)
 
-        if self.idx != sd_unet.current_unet.profile_idx:
+        if sd_unet.current_unet is not None and self.idx != sd_unet.current_unet.profile_idx:
             sd_unet.current_unet.profile_idx = self.idx
             sd_unet.current_unet.switch_engine()
 
