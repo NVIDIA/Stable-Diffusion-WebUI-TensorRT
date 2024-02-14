@@ -63,5 +63,56 @@ def install():
             live=True,
         )
 
+    ###########################################################
+    ############# ControlNet ##################################
+
+    # Diffusers
+    if not launch.is_installed("diffusers"):
+        print("Diffusers is not installed! Installing...")
+        launch.run_pip(
+            "install diffusers",
+            "diffusers",
+            live=True,
+        )
+    if not launch.is_installed("transformers"):
+        print("Transformers is not installed! Installing...")
+        launch.run_pip(
+            "install transformers",
+            "transformers",
+            live=True,
+        )
+    if not launch.is_installed("accelerate"):
+        print("accelerate is not installed! Installing...")
+        launch.run_pip(
+            "install accelerate",
+            "accelerate",
+            live=True,
+        )
+    if not launch.is_installed("optimum"):
+        print("Diffusers is not installed! Installing...")
+        launch.run_pip(
+            "install optimum",
+            "optimum",
+            live=True,
+        )
+
+    # OpenCV
+    if not launch.is_installed("cv2"):
+        print("OpenCV is not installed! Installing...")
+        launch.run_pip(
+            "install opencv-contrib-python",
+            "opencv-contrib-python",
+            live=True,
+        )
+
+    # ControlNet AUX
+    if not launch.is_installed("controlnet_aux"):
+        print("ControlNetAux is not installed! Installing...")
+        launch.run_pip(
+            "install controlnet-aux",
+            "controlnet-aux",
+            live=True,
+        )
+
 
 install()

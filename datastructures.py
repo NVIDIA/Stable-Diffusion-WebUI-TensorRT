@@ -4,6 +4,28 @@ from json import JSONEncoder
 import torch
 
 
+class ControlModelType(Enum):
+    CONTROLNET = "ControlNet"
+    T2IADAPTER = "T2IAdapter"
+
+    @classmethod
+    def from_string(cls, s):
+        return getattr(cls, s.upper(), None)
+
+    def __str__(self):
+        return self.name.lower()
+
+
+@dataclass
+class ControlModel:
+    annotator: str
+    id: str
+    version: str
+
+    def __str__(self):
+        return self.annotator.replace("_", " ").title() + " v" + self.version
+
+
 class SDVersion(Enum):
     SD1 = 1
     SD2 = 2
@@ -33,6 +55,33 @@ class SDVersion(Enum):
             return False
 
 
+class ResizeOption(Enum):
+    CROP = "Crop"
+    FILL = "Fill"
+    RESIZE = "Resize"
+
+    def __str__(self):
+        return self.name.title()
+
+    def __eq__(self, other: object) -> bool:
+        if self.__class__ is other.__class__:
+            return self == other
+        try:
+            return self.value == other.value
+        except:
+            pass
+        try:
+            if isinstance(other, str):
+                return str(self) == other
+        except:
+            pass
+        return NotImplemented
+
+    @staticmethod
+    def list_resize_options():
+        return list(map(str, ResizeOption))
+
+
 class ModelType(Enum):
     UNET = 0
     CONTROLNET = 1
@@ -57,6 +106,7 @@ class ModelConfig:
     lora: bool
     vram: int
     unet_hidden_dim: int = 4
+    has_control: bool = False
 
     def is_compatible_from_dict(self, feed_dict: dict):
         distance = 0
@@ -140,6 +190,16 @@ class ProfileSettings:
             self.t_opt,
             self.t_max,
         )
+
+    def __hash__(self):
+        h = []
+        for k, v in self.__dict__.items():
+            if self.static_shape and not "opt" in k:
+                continue
+            if k not in ["static_shape"]:
+                h.append(v)
+        h = int("".join(map(str, h)))
+        return h
 
     def out(self):
         return (

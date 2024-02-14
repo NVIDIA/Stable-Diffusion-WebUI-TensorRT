@@ -1,14 +1,15 @@
 import os
 import json
 import copy
+from collections import defaultdict
 from logging import info, warning
 import torch
 
 from modules import paths_internal
 
-from datastructures import ModelConfig, ModelConfigEncoder
+from datastructures import ModelConfig, ModelConfigEncoder, ControlModel
 
-
+EXTENSION_DIR = os.path.dirname(os.path.realpath(__file__))
 ONNX_MODEL_DIR = os.path.join(paths_internal.models_path, "Unet-onnx")
 if not os.path.exists(ONNX_MODEL_DIR):
     os.makedirs(ONNX_MODEL_DIR)
@@ -19,6 +20,7 @@ LORA_MODEL_DIR = os.path.join(paths_internal.models_path, "Lora")
 NVIDIA_CACHE_URL = ""
 
 MODEL_FILE = os.path.join(TRT_MODEL_DIR, "model.json")
+MODEL_HF_FILE = os.path.join(EXTENSION_DIR, "cnet_hf.json")
 
 
 def get_cc():
@@ -43,12 +45,16 @@ class ModelManager:
         self.update()
 
     @staticmethod
-    def get_onnx_path(model_name):
+    def get_onnx_path(model_name, is_contolnet: bool = False):
+        if is_contolnet:
+            model_name = f"{model_name}_cnet"
         onnx_filename = f"{model_name}.onnx"
         onnx_path = os.path.join(ONNX_MODEL_DIR, onnx_filename)
         return onnx_filename, onnx_path
 
-    def get_trt_path(self, model_name, model_hash, profile, static_shape):
+    def get_trt_path_legacy(
+        self, model_name, model_hash, profile, static_shape, is_contolnet: bool = False
+    ):
         profile_hash = []
         n_profiles = 1 if static_shape else 3
         for k, v in profile.items():
@@ -58,11 +64,23 @@ class ModelManager:
             profile_hash.append(k + "=" + "+".join(dim_hash))
 
         profile_hash = "-".join(profile_hash)
-        trt_filename = (
-            "_".join([model_name, model_hash, self.cc, profile_hash]) + ".trt"
-        )
+        trt_filename = "_".join([model_name, model_hash, self.cc, profile_hash])
+
+        trt_filename += ".trt" if not is_contolnet else "_cnet.trt"
         trt_path = os.path.join(TRT_MODEL_DIR, trt_filename)
 
+        return trt_filename, trt_path
+
+    def get_trt_path(self, model_name, profile_settings, has_control, *args, **kwargs):
+        if kwargs:
+            return self.get_trt_path_legacy(model_name, *args, **kwargs)
+
+        h = hex(hash(profile_settings))[2:]
+
+        trt_filename = "".join(
+            [model_name, "_cnet_" if has_control else "_", str(h), ".trt"]
+        )
+        trt_path = os.path.join(TRT_MODEL_DIR, trt_filename)
         return trt_filename, trt_path
 
     def get_weights_map_path(self, model_name: str):
@@ -104,6 +122,7 @@ class ModelManager:
         self,
         model_name,
         model_hash,
+        engine_filename,
         profile,
         static_shapes,
         fp32,
@@ -112,12 +131,18 @@ class ModelManager:
         vram,
         unet_hidden_dim,
         lora,
+        controlnet,
     ):
         config = ModelConfig(
-            profile, static_shapes, fp32, inpaint, refit, lora, vram, unet_hidden_dim
-        )
-        trt_name, trt_path = self.get_trt_path(
-            model_name, model_hash, profile, static_shapes
+            profile,
+            static_shapes,
+            fp32,
+            inpaint,
+            refit,
+            lora,
+            vram,
+            unet_hidden_dim,
+            controlnet,
         )
 
         base_model_name = f"{model_name}"  # _{model_hash}
@@ -128,7 +153,7 @@ class ModelManager:
             self.all_models[self.cc][base_model_name] = []
         self.all_models[self.cc][base_model_name].append(
             {
-                "filepath": trt_name,
+                "filepath": engine_filename,
                 "config": config,
             }
         )
@@ -234,4 +259,26 @@ class ModelManager:
         return valid_models, distances, idx
 
 
+class ControlNetManager:
+    def __init__(self, model_file=MODEL_HF_FILE) -> None:
+        with open(model_file, "r") as f:
+            out = json.load(f)
+
+        self.available_controlnets = defaultdict(list)
+        for sd_version, cnets in out["controlnet"].items():
+            for cnet in cnets:
+                self.available_controlnets[sd_version].append(ControlModel(**cnet))
+
+    def list_controlnet(self, sd_version: str):
+        return [m.__str__() for m in self.available_controlnets[sd_version]]
+
+    def get_hf_id(self, model_id: str) -> str:
+        for sd_version, cnets in self.available_controlnets.items():
+            for cnet in cnets:
+                if cnet.__str__() == model_id:
+                    return cnet.id
+        raise ValueError(f"ControlNet {model_id} not found")
+
+
 modelmanager = ModelManager()
+controlnetmanager = ControlNetManager()

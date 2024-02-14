@@ -1,5 +1,6 @@
 import os
 import re
+import itertools
 from typing import List
 
 import numpy as np
@@ -13,6 +14,7 @@ from modules import script_callbacks, sd_unet, devices, scripts, shared
 import ui_trt
 from utilities import Engine
 from model_manager import TRT_MODEL_DIR, modelmanager
+from model_helper import ControlNetModel
 from datastructures import ModelType
 from scripts.lora import apply_loras
 
@@ -44,6 +46,8 @@ class TrtUnet(sd_unet.SdUnet):
         self.refitted_keys = set()
 
         self.engine = None
+        self.has_control = False
+        self.cnets = None
 
     def forward(
         self,
@@ -55,24 +59,57 @@ class TrtUnet(sd_unet.SdUnet):
     ) -> torch.Tensor:
         nvtx.range_push("forward")
         feed_dict = {
-            "sample": x.float(),
-            "timesteps": timesteps.float(),
-            "encoder_hidden_states": context.float(),
+            "sample": x.half(),
+            "timesteps": timesteps.half(),
+            "encoder_hidden_states": context.half(),
         }
         if "y" in kwargs:
-            feed_dict["y"] = kwargs["y"].float()
+            feed_dict["y"] = kwargs["y"].half()
+
+        control_dict = None
+        if self.cnets is not None and self.has_control:
+            control_dict = self.run_cnet(x, timesteps, context, *args, **kwargs)
+            feed_dict.update(control_dict)
+        elif self.has_control:
+            control_dict = ControlNetModel.get_contol_shape_dict(x.shape[0], *x.shape[2:])
 
         tmp = torch.empty(
             self.engine_vram_req, dtype=torch.uint8, device=devices.device
         )
         self.engine.context.device_memory = tmp.data_ptr()
         self.cudaStream = torch.cuda.current_stream().cuda_stream
-        self.engine.allocate_buffers(feed_dict)
+        self.engine.allocate_buffers(feed_dict, additional_shapes=control_dict)
 
         out = self.engine.infer(feed_dict, self.cudaStream)["latent"]
 
         nvtx.range_pop()
         return out
+
+    @torch.inference_mode()
+    def run_cnet(self, x, timesteps, context, *args, **kwargs):
+        nvtx.range_push("controlnet")
+        hs = None
+        control_dict = {}
+        for cnet in self.cnets:
+            down_res_sample, mid_res_sample = cnet.model(
+                x,
+                timesteps,
+                context,
+                cnet.controlnet_cond,
+                cnet.weight,
+                return_dict=False,
+            )
+            out = [*down_res_sample, mid_res_sample]
+            if hs is None:
+                hs = out
+                continue
+            for i, _h in enumerate(out):
+                hs[i] += _h
+
+        for i, h in enumerate(hs):
+            control_dict[f"control_{i}"] = h
+        nvtx.range_pop()
+        return control_dict
 
     def apply_loras(self, refit_dict: dict):
         if not self.refitted_keys.issubset(set(refit_dict.keys())):
@@ -99,6 +136,7 @@ class TrtUnet(sd_unet.SdUnet):
         print(self.engine)
         self.engine_vram_req = self.engine.engine.device_memory_size
         self.engine.activate(True)
+        self.has_control = self.loaded_config["config"].has_control
 
     def deactivate(self):
         del self.engine
@@ -229,9 +267,7 @@ class TensorRTScript(scripts.Script):
                 raise Exception(
                     f"Please export the LoRA checkpoint {lora_name} first from the TensorRT LoRA tab"
                 )
-            lora_pathes.append(
-                available[lora_name]
-            )
+            lora_pathes.append(available[lora_name])
 
         # Merge lora refit dicts
         base_name, base_path = modelmanager.get_onnx_path(p.sd_model_name)
@@ -299,9 +335,17 @@ class TensorRTScript(scripts.Script):
         if self.torch_unet:
             return super().process_batch(p, *args, **kwargs)
 
-        if sd_unet.current_unet is not None and self.idx != sd_unet.current_unet.profile_idx:
+        if (
+            sd_unet.current_unet is not None
+            and self.idx != sd_unet.current_unet.profile_idx
+        ):
             sd_unet.current_unet.profile_idx = self.idx
             sd_unet.current_unet.switch_engine()
+
+        if hasattr(p, "controlnet") and sd_unet.current_unet is not None:
+            sd_unet.current_unet.cnets = p.controlnet
+        else:
+            sd_unet.current_unet.cnets = None
 
     def before_hr(self, p, *args):
         if self.idx != self.hr_idx:

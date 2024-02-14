@@ -109,9 +109,11 @@ class UNetModel(torch.nn.Module):
                 dtype=dtype,
                 device=device,
             ),
-            torch.randn(batch_size, self.num_xl_classes, dtype=dtype, device=device)
-            if self.is_xl
-            else None,
+            (
+                torch.randn(batch_size, self.num_xl_classes, dtype=dtype, device=device)
+                if self.is_xl
+                else None
+            ),
         )
 
     def get_input_profile(self, profile: ProfileSettings) -> dict:
@@ -225,6 +227,96 @@ class UNetModel(torch.nn.Module):
         onnx_opt_graph = opt.cleanup(return_onnx=True)
         opt.info(name + ": finished")
         return onnx_opt_graph
+
+
+sdxl_hs = [
+    *([(320, 1)]) * 3,
+    *([(320, 2)]) * 1,
+    *([(640, 2)]) * 2,
+    *([(640, 4)]) * 1,
+    *([(1280, 4)]) * 3,
+]
+
+sd1_hs = [
+    *([(320, 1)]) * 3,
+    *([(320, 2)]) * 1,
+    *([(640, 2)]) * 2,
+    *([(640, 4)]) * 1,
+    *([(1280, 4)]) * 2,
+    *([(1280, 8)]) * 4,
+]
+
+sd2_hs = sd1_hs
+
+
+class ControlNetModel(UNetModel):
+    def __init__(
+        self, unet, embedding_dim: int, text_minlen: int = 77, is_xl: bool = False
+    ) -> None:
+        super().__init__(unet, embedding_dim, text_minlen, is_xl)
+
+        self.hs_dims = sdxl_hs if is_xl else sd1_hs
+        control_axes = {}
+        for i, (hs, s) in enumerate(self.hs_dims):
+            control_axes[f"control_{i}"] = {0: "2B", 2: f"H{s}", 3: f"W{s}"}
+        self.dyn_axes.update(control_axes)
+
+    def get_input_names(self) -> List[str]:
+        names = super().get_input_names()
+        names.extend([f"control_{i}" for i in range(len(self.hs_dims))])
+        return names
+
+    def get_sample_input(
+        self,
+        batch_size: int,
+        latent_height: int,
+        latent_width: int,
+        text_len: int,
+        device: str = "cuda",
+        dtype: torch.dtype = torch.float32,
+    ) -> Tuple[torch.Tensor]:
+        samples = super().get_sample_input(
+            batch_size, latent_height, latent_width, text_len, device, dtype
+        )
+        hs_samples = []
+        for i, (hs, s) in enumerate(self.hs_dims):
+            h = latent_height // s
+            w = latent_width // s
+            hs_samples.append(
+                torch.randn(batch_size, hs, h, w).to(dtype=dtype, device=device)
+            )
+        return samples + tuple(hs_samples)
+
+    def get_input_profile(self, profile: ProfileSettings) -> dict:
+        base_profile = super().get_input_profile(profile)
+        min_batch, opt_batch, max_batch = profile.get_a1111_batch_dim()
+        (
+            min_latent_height,
+            latent_height,
+            max_latent_height,
+            min_latent_width,
+            latent_width,
+            max_latent_width,
+        ) = profile.get_latent_dim()
+
+        for i, (hs, s) in enumerate(self.hs_dims):
+            base_profile[f"control_{i}"] = [
+                (min_batch, hs, min_latent_height // s, min_latent_width // s),
+                (opt_batch, hs, latent_height // s, latent_width // s),
+                (max_batch, hs, max_latent_height // s, max_latent_width // s),
+            ]
+        return base_profile
+    
+    @staticmethod
+    def get_contol_shape_dict(batch_size: int, latent_height: int, latent_width: int, is_xl: bool = False) -> dict[Tuple[int]]:
+        shapes = {}
+        hs_dims = sdxl_hs if is_xl else sd1_hs
+        for i, (hs, s) in enumerate(hs_dims):
+            h = latent_height // s
+            w = latent_width // s
+            shapes[f"control_{i}"] = (batch_size, hs, h, w)
+        return shapes
+
 
 
 class Optimizer:

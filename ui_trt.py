@@ -14,7 +14,8 @@ from modules import sd_hijack, sd_models, shared
 from modules.ui_common import refresh_symbol
 from modules.ui_components import ToolButton
 
-from model_helper import UNetModel
+from model_helper import UNetModel, ControlNetModel
+from control_unet import ControlUNet
 from exporter import export_onnx, export_trt, export_lora
 from model_manager import modelmanager, cc_major, TRT_MODEL_DIR
 from datastructures import SDVersion, ProfilePrests, ProfileSettings
@@ -58,6 +59,7 @@ def export_unet_to_trt(
     force_export,
     static_shapes,
     preset,
+    is_contolnet,
 ):
     sd_hijack.model_hijack.apply_optimizations("None")
 
@@ -88,18 +90,26 @@ def export_unet_to_trt(
     model_hash = shared.sd_model.sd_checkpoint_info.hash
     model_name = shared.sd_model.sd_checkpoint_info.model_name
 
-    onnx_filename, onnx_path = modelmanager.get_onnx_path(model_name)
+    onnx_filename, onnx_path = modelmanager.get_onnx_path(model_name, is_contolnet)
     timing_cache = modelmanager.get_timing_cache()
 
     diable_optimizations = is_xl
     embedding_dim = get_context_dim()
 
-    modelobj = UNetModel(
-        shared.sd_model.model.diffusion_model,
+    ldm_model = shared.sd_model.model.diffusion_model
+    if is_contolnet:
+        UNetCLS = ControlNetModel
+        bound_method = ControlUNet.forward.__get__(ldm_model, ldm_model.__class__)
+        setattr(ldm_model, "forward", bound_method)
+    else:
+        UNetCLS = UNetModel
+    modelobj = UNetCLS(
+        ldm_model,
         embedding_dim,
         text_minlen=profile_settings.t_min,
         is_xl=is_xl,
     )
+
     modelobj.apply_torch_model()
 
     profile = modelobj.get_input_profile(profile_settings)
@@ -113,7 +123,7 @@ def export_unet_to_trt(
     torch.cuda.empty_cache()
 
     trt_engine_filename, trt_path = modelmanager.get_trt_path(
-        model_name, model_hash, profile, static_shapes
+        model_name, profile_settings, is_contolnet
     )
 
     if not os.path.exists(trt_path) or force_export:
@@ -137,6 +147,7 @@ def export_unet_to_trt(
         modelmanager.add_entry(
             model_name,
             model_hash,
+            trt_engine_filename,
             profile,
             static_shapes,
             fp32=use_fp32,
@@ -145,6 +156,7 @@ def export_unet_to_trt(
             vram=0,
             unet_hidden_dim=modelobj.in_channels,
             lora=False,
+            controlnet=is_contolnet,
         )
     else:
         print(
@@ -222,7 +234,6 @@ def export_lora_to_trt(lora_name, force_export):
     )
 
     save_file(refit_dict, lora_trt_path)
-
 
     return "## Exported Successfully \n"
 
@@ -417,6 +428,12 @@ def on_ui_tabs():
                             elem_id="sd_version",
                             default="Default",
                             value="Default",
+                        )
+
+                        is_contolnet = gr.Checkbox(
+                            label="Enable ControlNet",
+                            value=True,
+                            elem_id="trt_has_control",
                         )
 
                         with gr.Accordion(
@@ -708,6 +725,7 @@ def on_ui_tabs():
                 force_rebuild,
                 static_shapes,
                 version,
+                is_contolnet,
             ],
             outputs=[trt_result],
         )
@@ -730,6 +748,7 @@ def on_ui_tabs():
                 force_rebuild,
                 static_shapes,
                 version,
+                is_contolnet,
             ],
             outputs=[trt_result],
         )

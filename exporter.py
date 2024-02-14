@@ -25,7 +25,9 @@ from datastructures import ProfileSettings
 from model_helper import UNetModel
 
 
-def apply_lora(model: torch.nn.Module, lora_path: str, inputs: Tuple[torch.Tensor]) -> torch.nn.Module:
+def apply_lora(
+    model: torch.nn.Module, lora_path: str, inputs: Tuple[torch.Tensor]
+) -> torch.nn.Module:
     try:
         import sys
 
@@ -40,16 +42,17 @@ def apply_lora(model: torch.nn.Module, lora_path: str, inputs: Tuple[torch.Tenso
         error("LoRA not found. Please install LoRA extension first from ...")
     model.forward(*inputs)
     lora_name = os.path.splitext(os.path.basename(lora_path))[0]
-    networks.load_networks(
-        [lora_name], [1.0], [1.0], [None]
-    )
+    networks.load_networks([lora_name], [1.0], [1.0], [None])
 
     model.forward(*inputs)
     return model
 
 
 def get_refit_weights(
-    state_dict: dict, onnx_opt_path: str, weight_name_mapping: dict, weight_shape_mapping: dict
+    state_dict: dict,
+    onnx_opt_path: str,
+    weight_name_mapping: dict,
+    weight_shape_mapping: dict,
 ) -> dict:
     refit_weights = OrderedDict()
     onnx_opt_dir = os.path.dirname(onnx_opt_path)
@@ -149,8 +152,8 @@ def export_onnx(
         profile.h_opt // 8,
         profile.w_opt // 8,
         profile.t_opt,
+        dtype=torch.float16,
     )
-
     if not os.path.exists(onnx_path):
         _export_onnx(
             modelobj.unet,
@@ -165,7 +168,14 @@ def export_onnx(
 
 
 def _export_onnx(
-    model: torch.nn.Module, inputs: Tuple[torch.Tensor], path: str, opset: int, in_names: List[str], out_names: List[str], dyn_axes: dict, optimizer=None
+    model: torch.nn.Module,
+    inputs: Tuple[torch.Tensor],
+    path: str,
+    opset: int,
+    in_names: List[str],
+    out_names: List[str],
+    dyn_axes: dict,
+    optimizer=None,
 ):
     tmp_dir = os.path.abspath("onnx_tmp")
     os.makedirs(tmp_dir, exist_ok=True)
@@ -220,7 +230,9 @@ def _export_onnx(
     shutil.rmtree(tmp_dir)
 
 
-def export_trt(trt_path: str, onnx_path: str, timing_cache: str, profile: dict, use_fp16: bool):
+def export_trt(
+    trt_path: str, onnx_path: str, timing_cache: str, profile: dict, use_fp16: bool
+):
     engine = Engine(trt_path)
 
     # TODO Still approx. 2gb of VRAM unaccounted for...

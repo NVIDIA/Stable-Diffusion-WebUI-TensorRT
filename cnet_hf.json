@@ -1,0 +1,72 @@
+{
+    "controlnet": {
+        "sd15": [
+            {
+                "annotator": "depth",
+                "version": "1.0",
+                "id": "lllyasviel/sd-controlnet-depth"
+            },
+            {
+                "annotator": "depth",
+                "version": "1.1",
+                "id": "lllyasviel/control_v11f1p_sd15_depth"
+            },
+            {
+                "annotator": "openpose",
+                "version": "1.0",
+                "id": "lllyasviel/sd-controlnet-openpose"
+            },
+            {
+                "annotator": "openpose",
+                "version": "1.1",
+                "id": "lllyasviel/control_v11p_sd15_openpose"
+            },
+            {
+                "annotator": "scribble",
+                "version": "1.0",
+                "id": "lllyasviel/sd-controlnet-scribble"
+            },
+            {
+                "annotator": "normal",
+                "version": "1.0",
+                "id": "lllyasviel/sd-controlnet-normal"
+            },
+            {
+                "annotator": "hed",
+                "version": "1.0",
+                "id": "lllyasviel/sd-controlnet-hed"
+            },
+            {
+                "annotator": "seg",
+                "version": "1.0",
+                "id": "lllyasviel/sd-controlnet-seg"
+            },
+            {
+                "annotator": "seg",
+                "version": "1.1",
+                "id": "lllyasviel/control_v11p_sd15_seg"
+            },
+            {
+                "annotator": "mlsd",
+                "version": "1.0",
+                "id": "lllyasviel/sd-controlnet-mlsd"
+            },
+            {
+                "annotator": "mlsd",
+                "version": "1.1",
+                "id": "lllyasviel/control_v11p_sd15_mlsd"
+            },
+            {
+                "annotator": "canny",
+                "version": "1.0",
+                "id": "lllyasviel/sd-controlnet-canny"
+            },
+            {
+                "annotator": "canny",
+                "version": "1.1",
+                "id": "lllyasviel/control_v11p_sd15_canny"
+            }
+        ],
+        "sdxl": []
+    }
+}

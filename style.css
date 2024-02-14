@@ -1,0 +1,15 @@
+.cnet-trt-preview-button {
+    height: 50%;
+    margin: auto 18px 2px 0px !important;
+    max-width: fit-content;
+    min-width: fit-content !important;
+    border-radius: 2px !important;
+}
+
+.cnet-trt-column-layout {
+    row-gap: 12px !important;
+}
+
+.cnet-trt-row-layout {
+    column-gap: 12px !important;
+}

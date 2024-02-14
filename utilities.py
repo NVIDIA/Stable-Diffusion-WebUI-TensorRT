@@ -37,6 +37,27 @@ import copy
 TRT_LOGGER = trt.Logger(trt.Logger.ERROR)
 G_LOGGER.module_severity = G_LOGGER.ERROR
 
+
+class Registry(dict):
+    def __init__(self, name: str, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.name = name
+
+    def __str__(self):
+        return self.name.title()
+
+    def choices(self):
+        return list(self.keys())
+
+    def register(self, name: str):
+        def decorator(fn, fn_name=name):
+            self[name] = fn
+            return fn
+
+        self[name] = decorator
+        return self[name]
+
+
 # Map of numpy dtype -> torch dtype
 numpy_to_torch_dtype_dict = {
     np.uint8: torch.uint8,
@@ -59,6 +80,7 @@ else:
 torch_to_numpy_dtype_dict = {
     value: key for (key, value) in numpy_to_torch_dtype_dict.items()
 }
+
 
 class TQDMProgressMonitor(trt.IProgressMonitor):
     def __init__(self):
@@ -289,18 +311,20 @@ class Engine:
         else:
             self.context = self.engine.create_execution_context()
 
-    def allocate_buffers(self, shape_dict=None, device="cuda"):
+    def allocate_buffers(self, shape_dict=None, device="cuda", additional_shapes=None):
         nvtx.range_push("allocate_buffers")
         for idx in range(self.engine.num_io_tensors):
             binding = self.engine[idx]
             if shape_dict and binding in shape_dict:
                 shape = shape_dict[binding].shape
+            elif additional_shapes and binding in additional_shapes:
+                shape = additional_shapes[binding]
             else:
                 shape = self.context.get_binding_shape(idx)
             dtype = trt.nptype(self.engine.get_binding_dtype(binding))
             if self.engine.binding_is_input(binding):
                 self.context.set_binding_shape(idx, shape)
-            tensor = torch.empty(
+            tensor = torch.zeros(
                 tuple(shape), dtype=numpy_to_torch_dtype_dict[dtype]
             ).to(device=device)
             self.tensors[binding] = tensor
