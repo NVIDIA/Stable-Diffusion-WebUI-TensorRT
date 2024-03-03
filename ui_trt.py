@@ -268,7 +268,10 @@ def get_lora_checkpoints():
         if os.path.exists(config_file):
             with open(config_file, "r") as f:
                 config = json.load(f)
-            version = SDVersion.from_str(config["sd version"])
+            try:
+                version = SDVersion.from_str(config["sd version"])
+            except:
+                version = SDVersion.Unknown
 
         else:
             version = SDVersion.Unknown
