@@ -158,7 +158,7 @@ class TensorRTScript(scripts.Script):
         )  # TODO: max_embedding, just ignore?
         if len(valid_models) == 0:
             gr.Error(
-                f"""No valid profile found for ({model_name}) LOWRES. Please go to the TensorRT tab and generate an engine with the necessary profile. 
+                f"""No valid profile found for ({model_name}) LOWRES. Please go to the TensorRT tab and generate an engine with the necessary profile.
                 If using hires.fix, you need an engine for both the base and upscaled resolutions. Otherwise, use the default (torch) U-Net."""
             )
             return None, None
@@ -177,7 +177,7 @@ class TensorRTScript(scripts.Script):
             )  # TODO: max_embedding
             if len(valid_models_hr) == 0:
                 gr.Error(
-                    f"""No valid profile found for ({model_name}) HIRES. Please go to the TensorRT tab and generate an engine with the necessary profile. 
+                    f"""No valid profile found for ({model_name}) HIRES. Please go to the TensorRT tab and generate an engine with the necessary profile.
                     If using hires.fix, you need an engine for both the base and upscaled resolutions. Otherwise, use the default (torch) U-Net."""
                 )
             merged_idx = [i for i, id in enumerate(idx) if id in idx_hr]
@@ -247,7 +247,7 @@ class TensorRTScript(scripts.Script):
 
         if not sd_unet_option.model_name == p.sd_model_name:
             gr.Error(
-                """Selected torch model ({}) does not match the selected TensorRT U-Net ({}). 
+                """Selected torch model ({}) does not match the selected TensorRT U-Net ({}).
                 Please ensure that both models are the same or select Automatic from the SD UNet dropdown.""".format(
                     p.sd_model_name, sd_unet_option.model_name
                 )
@@ -299,7 +299,7 @@ class TensorRTScript(scripts.Script):
         if self.torch_unet:
             return super().process_batch(p, *args, **kwargs)
 
-        if self.idx != sd_unet.current_unet.profile_idx:
+        if sd_unet.current_unet is not None and self.idx != sd_unet.current_unet.profile_idx:
             sd_unet.current_unet.profile_idx = self.idx
             sd_unet.current_unet.switch_engine()
 
