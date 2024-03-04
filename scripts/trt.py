@@ -48,7 +48,9 @@ class TrtUnet(sd_unet.SdUnet):
         self.engine = None
         self.has_control = False
         self.cnets = None
+        self.shape_hash = 0
 
+    @torch.inference_mode()
     def forward(
         self,
         x: torch.Tensor,
@@ -65,23 +67,26 @@ class TrtUnet(sd_unet.SdUnet):
         }
         if "y" in kwargs:
             feed_dict["y"] = kwargs["y"].half()
-
         control_dict = None
         if self.cnets is not None and self.has_control:
             control_dict = self.run_cnet(x, timesteps, context, *args, **kwargs)
             feed_dict.update(control_dict)
         elif self.has_control:
-            control_dict = ControlNetModel.get_contol_shape_dict(x.shape[0], *x.shape[2:])
+            control_dict = ControlNetModel.get_contol_shape_dict(
+                x.shape[0], *x.shape[2:]
+            )
 
         tmp = torch.empty(
             self.engine_vram_req, dtype=torch.uint8, device=devices.device
         )
         self.engine.context.device_memory = tmp.data_ptr()
         self.cudaStream = torch.cuda.current_stream().cuda_stream
-        self.engine.allocate_buffers(feed_dict, additional_shapes=control_dict)
-
+        if self.shape_hash != hash(x.shape):
+            self.shape_hash = hash(x.shape)
+            self.engine.allocate_buffers(
+                feed_dict, additional_shapes=control_dict
+            )  # 1 Only allocate if needed, 2 optimize, 3 not needed at all?
         out = self.engine.infer(feed_dict, self.cudaStream)["latent"]
-
         nvtx.range_pop()
         return out
 

@@ -89,11 +89,10 @@ class ControlUNet(UNetModel):
             control_6,
             control_7,
             control_8,
-            control_9,
-            control_10,
-            control_11,
-            control_12,
+            control_9
         ]
+        if control_12 is not None:
+            control += [control_10, control_11, control_12]
         total_t2i_adapter_embedding = [0.0] * 4
         hs = []
         require_inpaint_hijack = False  # todo: 需要在每一次都确认下是佛为False

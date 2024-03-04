@@ -7,7 +7,7 @@ python = sys.executable
 
 def install():
     if launch.is_installed("tensorrt"):
-        if not version("tensorrt") == "9.0.1.post11.dev4":
+        if not version("tensorrt") == "9.2.0.post12.dev5":
             launch.run(
                 ["python", "-m", "pip", "uninstall", "-y", "tensorrt"],
                 "removing old version of tensorrt",
@@ -19,7 +19,7 @@ def install():
             "install nvidia-cudnn-cu11==8.9.4.25 --no-cache-dir", "nvidia-cudnn-cu11"
         )
         launch.run_pip(
-            "install --pre --extra-index-url https://pypi.nvidia.com tensorrt==9.0.1.post11.dev4 --no-cache-dir",
+            "install --pre --extra-index-url https://pypi.nvidia.com tensorrt==9.2.0.post12.dev5 --no-cache-dir",
             "tensorrt",
             live=True,
         )

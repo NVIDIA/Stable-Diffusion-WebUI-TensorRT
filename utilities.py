@@ -257,6 +257,7 @@ class Engine:
         config = builder.create_builder_config()
         config.progress_monitor = TQDMProgressMonitor()
 
+        config.set_flag(trt.BuilderFlag.STRICT_TYPES)
         config.set_flag(trt.BuilderFlag.FP16) if fp16 else None
         config.set_flag(trt.BuilderFlag.REFIT) if enable_refit else None
 
@@ -353,3 +354,4 @@ class Engine:
                 shape = self.engine.get_profile_shape(opt_profile, name)
                 out += f"\t{name} = {shape}\n"
         return out
+

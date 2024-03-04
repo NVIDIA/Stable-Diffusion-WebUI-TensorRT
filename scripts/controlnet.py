@@ -57,7 +57,7 @@ class ControlNetTensorRTScript(scripts.Script):
         elem_id = ("img2img" if is_img2img else "txt2img") + "_controlnet_trt"
         controlnet_trt_units = ()
         # Create 3 tabs and loop over them
-        with gr.Group(elem_id=elem_id, visible=not is_img2img):
+        with gr.Group(elem_id=elem_id, visible=True):
             with InputAccordion(
                 False, label="ControlNet TensorRT", elem_id=f"{elem_id}_accordion"
             ) as self.enable_controlnet:
