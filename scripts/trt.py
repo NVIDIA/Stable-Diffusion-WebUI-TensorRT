@@ -73,7 +73,7 @@ class TrtUnet(sd_unet.SdUnet):
             feed_dict.update(control_dict)
         elif self.has_control:
             control_dict = ControlNetModel.get_contol_shape_dict(
-                x.shape[0], *x.shape[2:]
+                x.shape[0], *x.shape[2:], "y" in kwargs
             )
 
         tmp = torch.empty(
