@@ -1,11 +1,14 @@
 import launch
 import sys
-from importlib_metadata import version
 
 python = sys.executable
 
 
 def install():
+    if not launch.is_installed("importlib_metadata"):
+        launch.run_pip("install importlib_metadata", "importlib_metadata", live=True)
+    from importlib_metadata import version
+
     if launch.is_installed("tensorrt"):
         if not version("tensorrt") == "9.0.1.post11.dev4":
             launch.run(
