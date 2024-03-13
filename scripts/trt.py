@@ -220,7 +220,7 @@ class TensorRTScript(scripts.Script):
             return
 
         # Get pathes
-        print("Apllying LoRAs: " + str(loras))
+        print("Applying LoRAs: " + str(loras))
         available = modelmanager.available_loras()
         for lora in loras:
             lora_name, lora_scale = lora.split(":")[1:]
