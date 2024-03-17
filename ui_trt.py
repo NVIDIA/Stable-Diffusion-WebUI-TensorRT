@@ -157,11 +157,28 @@ def export_unet_to_trt(
     return "## Exported Successfully \n"
 
 
+def process_lora_name(lora_name):
+    last_left_bracket_index = lora_name.rfind('(')
+    
+    if last_left_bracket_index != -1:
+        version_info = lora_name[last_left_bracket_index:]
+        # rstrip
+        # lora_name = lora_name[:last_left_bracket_index].rstrip()
+        # fixed file name with space on the end
+        lora_name = lora_name[:last_left_bracket_index - 1]
+        return lora_name, version_info
+    else:
+        # if can't find left ( will not change anything)
+        return lora_name, ''
+
 def export_lora_to_trt(lora_name, force_export):
     is_xl = shared.sd_model.is_sdxl
 
     available_lora_models = get_lora_checkpoints()
-    lora_name = lora_name.split(" ")[0]
+    #lora_name = lora_name.split(" ")[0]
+    # Fixed lora_name with space
+    lora_name, version_info = process_lora_name(lora_name) # it also have fixed on the end space of lora_name
+
     lora_model = available_lora_models.get(lora_name, None)
     if lora_model is None:
         return f"## No LoRA model found for {lora_name}"
