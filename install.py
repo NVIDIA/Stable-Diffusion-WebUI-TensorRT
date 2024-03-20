@@ -25,7 +25,7 @@ def install():
     tensorrt_version = get_installed_version("tensorrt")
     if not tensorrt_version or tensorrt_version != "9.3.0.post12.dev1":
         # nvidia-cudnn-cu11 installation
-        if launch.is_installed("nvidia-cudnn-cu12") and get_installed_version("nvidia-cudnn-cu11") != "8.9.7.29":
+        if launch.is_installed("nvidia-cudnn-cu12") and get_installed_version("nvidia-cudnn-cu12") != "8.9.6.50":
             install_package("nvidia-cudnn-cu12", "8.9.6.50", uninstall_first=True, no_cache_dir=True)
         install_package("tensorrt", "9.3.0.post12.dev1", uninstall_first=True, extra_index_url="https://pypi.nvidia.com", no_cache_dir=True)
 
