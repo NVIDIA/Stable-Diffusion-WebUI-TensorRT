@@ -61,8 +61,6 @@ def export_unet_to_trt(
     preset,
     is_contolnet,
 ):
-    sd_hijack.model_hijack.apply_optimizations("None")
-
     is_xl = shared.sd_model.is_sdxl
     model_name = shared.sd_model.sd_checkpoint_info.model_name
 
@@ -96,7 +94,9 @@ def export_unet_to_trt(
     diable_optimizations = is_xl
     embedding_dim = get_context_dim()
 
+
     ldm_model = shared.sd_model.model.diffusion_model
+    swap_method = ldm_model.forward.__get__(ldm_model, ldm_model.__class__)
     if is_contolnet:
         UNetCLS = ControlNetModel
         bound_method = ControlUNet.forward.__get__(ldm_model, ldm_model.__class__)
@@ -109,10 +109,17 @@ def export_unet_to_trt(
         text_minlen=profile_settings.t_min,
         is_xl=is_xl,
     )
-
     modelobj.apply_torch_model()
-
     profile = modelobj.get_input_profile(profile_settings)
+
+    trt_engine_filename, trt_path = modelmanager.get_trt_path(
+        model_name, profile_settings, is_contolnet
+    )
+
+    if os.path.exists(trt_path) and not force_export:
+        setattr(ldm_model, "forward", swap_method)
+        return "## Model has already been exported. \n"
+
     export_onnx(
         onnx_path,
         modelobj,
@@ -121,10 +128,7 @@ def export_unet_to_trt(
     )
     gc.collect()
     torch.cuda.empty_cache()
-
-    trt_engine_filename, trt_path = modelmanager.get_trt_path(
-        model_name, profile_settings, is_contolnet
-    )
+    setattr(ldm_model, "forward", swap_method)
 
     if not os.path.exists(trt_path) or force_export:
         print(
@@ -165,7 +169,6 @@ def export_unet_to_trt(
 
     gc.collect()
     torch.cuda.empty_cache()
-
     return "## Exported Successfully \n"
 
 

@@ -236,7 +236,7 @@ def export_trt(
     engine = Engine(trt_path)
 
     # TODO Still approx. 2gb of VRAM unaccounted for...
-    model = shared.sd_model.cpu()
+    shared.sd_model = shared.sd_model.cpu()
     torch.cuda.empty_cache()
 
     s = time.time()
@@ -252,5 +252,5 @@ def export_trt(
     e = time.time()
     info(f"Time taken to build: {(e-s)}s")
 
-    shared.sd_model = model.cuda()
+    shared.sd_model = shared.sd_model.cuda()
     return ret

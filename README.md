@@ -30,6 +30,9 @@ To use LoRA / LyCORIS checkpoints they first need to be converted to a TensorRT 
 2. Export. (This will not generate an engine but only convert the weights in ~20s)
 3. You can use the exported LoRAs as usual using the prompt embedding.
 
+## ControlNet
+To use ControlNets, simply click the “ControlNet TensorRT” checkbox on the main tab, upload an image, and select the ControlNet of your choice.
+The default ControlNet models are included within this extension and are accelerated by TensorRT. They do not require a separate download. Other ControlNets can be deployed normally. To use other ControlNets that are not TensorRT accelerated, set the UNet to "None;" they will fall back to PyTorch.
 
 ## More Information
 

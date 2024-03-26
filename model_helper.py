@@ -63,6 +63,7 @@ class UNetModel(torch.nn.Module):
 
         self.unet.apply(disable_checkpoint)
         self.set_unet("None")
+        sd_hijack.model_hijack.apply_optimizations("None")
 
     def set_unet(self, ckpt: str):
         # TODO test if using this with TRT works
