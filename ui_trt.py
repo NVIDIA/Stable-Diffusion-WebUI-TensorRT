@@ -437,6 +437,7 @@ def on_ui_tabs():
                             label="Enable ControlNet",
                             value=True,
                             elem_id="trt_has_control",
+                            visible=False
                         )
 
                         with gr.Accordion(
