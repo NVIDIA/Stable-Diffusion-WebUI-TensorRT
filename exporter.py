@@ -39,9 +39,11 @@ def apply_lora(model: torch.nn.Module, lora_path: str, inputs: Tuple[torch.Tenso
         error(e)
         error("LoRA not found. Please install LoRA extension first from ...")
     model.forward(*inputs)
-    lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+    # it will split the lora file name have dot mean(already clean the filename extension)
+    # lora_name = os.path.splitext(os.path.basename(lora_path))[0]
+    # so the lora_name will be the same as the lora_path
     networks.load_networks(
-        [lora_name], [1.0], [1.0], [None]
+        [lora_path], [1.0], [1.0], [None]
     )
 
     model.forward(*inputs)
@@ -105,6 +107,8 @@ def export_lora(
         [weights_name_mapping, weights_shape_mapping] = json.load(fp_wts)
 
     with torch.inference_mode(), torch.autocast("cuda"):
+        # print(f"[Yomisana] Exporting to ONNX: \nonnx_path:{onnx_path} \nweights_map_path:{weights_map_path} \nlora_name:{lora_name} \nprofile:{profile}")
+        # print(f"[Yomisana] brother ewww:{os.path.splitext(lora_name)[0]}\ninputs:{inputs}")
         modelobj.unet = apply_lora(
             modelobj.unet, os.path.splitext(lora_name)[0], inputs
         )
