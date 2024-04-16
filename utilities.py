@@ -234,6 +234,7 @@ class Engine:
         update_output_names=None,
     ):
         print(f"Building TensorRT engine for {onnx_path}: {self.engine_path}")
+        trt.init_libnvinfer_plugins(None, "")
         p = [Profile()]
         if input_profile:
             p = [Profile() for i in range(len(input_profile))]
