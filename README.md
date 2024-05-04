@@ -8,18 +8,20 @@ Supports Stable Diffusion 1.5,2.1, SDXL, SDXL Turbo, and LCM. For SDXL and SDXL 
 
 Example instructions for Automatic1111:
 
-1. Start the webui.bat
-2. Select the Extensions tab and click on Install from URL
-3. Copy the link to this repository and paste it into URL for extension's git repository
-4. Click Install
+1. Start webui.bat
+2. Select the `Extensions` tab and click on the `Install from URL` sub-tab
+3. Copy the link to this repository and paste it into the `URL for extension's git repository` input
+4. Click `Install`
+5. After installation completes, switch to the `Installed` sub-tab and click `Apply and restart UI`
 
 
 ## How to use
 
-1. Click on the “Generate Default Engines” button. This step takes 2-10 minutes depending on your GPU. You can generate engines for other combinations.
-2. Go to Settings → User Interface → Quick Settings List, add sd_unet. Apply these settings, then reload the UI.
-3. Back in the main UI, select “Automatic” from the sd_unet dropdown menu at the top of the page if not already selected.
-4. You can now start generating images accelerated by TRT. If you need to create more Engines, go to the TensorRT tab.
+1. After successful installation, the Automatic1111 web UI will have a new `TensorRT` tab.
+2. In the `TensorRT` tab, click the `Generate Default Engines` button. This step takes 2-10 minutes depending on your GPU. You can also generate non-default engines with settings of your choosing.
+3. Go to `Settings` → `User Interface` → `User Interface` → `Quick Settings List`, add `sd_unet`. Apply these settings, then reload the UI.
+4. Back in the main UI, select `Automatic` from the `SD Unet` dropdown menu at the top of the page if not already selected.
+5. You can now start generating images accelerated by TRT. If you need to create more Engines, go to the `TensorRT` tab.
 
 Happy prompting!
 
