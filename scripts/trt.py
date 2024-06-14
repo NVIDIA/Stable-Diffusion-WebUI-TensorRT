@@ -349,8 +349,10 @@ class TensorRTScript(scripts.Script):
 
         if hasattr(p, "controlnet") and sd_unet.current_unet is not None:
             sd_unet.current_unet.cnets = p.controlnet
-        else:
+        elif sd_unet.current_unet is not None:
             sd_unet.current_unet.cnets = None
+        else:
+            sd_unet.current_unet = None
 
     def before_hr(self, p, *args):
         if self.idx != self.hr_idx:
