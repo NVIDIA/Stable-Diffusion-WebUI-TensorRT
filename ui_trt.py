@@ -266,7 +266,7 @@ def get_lora_checkpoints():
 
         base_model = metadata.get("ss_sd_model_name", "Unknown")
         if os.path.exists(config_file):
-            with open(config_file, "r") as f:
+            with open(config_file, "r", encoding="utf-8") as f:
                 config = json.load(f)
             try:
                 version = SDVersion.from_str(config["sd version"])
