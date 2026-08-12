@@ -223,8 +223,12 @@ class TensorRTScript(scripts.Script):
         print("Apllying LoRAs: " + str(loras))
         available = modelmanager.available_loras()
         for lora in loras:
-            lora_name, lora_scale = lora.split(":")[1:]
-            lora_scales.append(float(lora_scale))
+            lora_parts = lora.split(":")[1:]
+            if len(lora_parts) < 1:
+                raise ValueError(f"Invalid LoRA tag: <{lora}>")
+            lora_name = lora_parts[0]
+            lora_scale = float(lora_parts[1]) if len(lora_parts) > 1 else 1.0
+            lora_scales.append(lora_scale)
             if lora_name not in available:
                 raise Exception(
                     f"Please export the LoRA checkpoint {lora_name} first from the TensorRT LoRA tab"
