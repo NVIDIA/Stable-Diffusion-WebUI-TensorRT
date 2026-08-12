@@ -12,7 +12,7 @@ def install():
     if launch.is_installed("tensorrt"):
         if not version("tensorrt") == "9.0.1.post11.dev4":
             launch.run(
-                ["python", "-m", "pip", "uninstall", "-y", "tensorrt"],
+                [python, "-m", "pip", "uninstall", "-y", "tensorrt"],
                 "removing old version of tensorrt",
             )
 
@@ -27,14 +27,14 @@ def install():
             live=True,
         )
         launch.run(
-            ["python", "-m", "pip", "uninstall", "-y", "nvidia-cudnn-cu11"],
+            [python, "-m", "pip", "uninstall", "-y", "nvidia-cudnn-cu11"],
             "removing nvidia-cudnn-cu11",
         )
 
     if launch.is_installed("nvidia-cudnn-cu11"):
         if version("nvidia-cudnn-cu11") == "8.9.4.25":
             launch.run(
-                ["python", "-m", "pip", "uninstall", "-y", "nvidia-cudnn-cu11"],
+                [python, "-m", "pip", "uninstall", "-y", "nvidia-cudnn-cu11"],
                 "removing nvidia-cudnn-cu11",
             )
 
