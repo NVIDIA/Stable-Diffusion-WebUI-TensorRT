@@ -1,7 +1,4 @@
 import launch
-import sys
-
-python = sys.executable
 
 
 def install():
