@@ -126,7 +126,7 @@ class TensorRTScript(scripts.Script):
     def before_process(self, p, *args):  # 1
         # Check divisibilty
         if p.width % 64 or p.height % 64:
-            gr.Error("Target resolution must be divisible by 64 in both dimensions.")
+            raise gr.Error("Target resolution must be divisible by 64 in both dimensions.")
 
         if self.is_img2img:
             return
@@ -134,7 +134,7 @@ class TensorRTScript(scripts.Script):
             hr_w = int(p.width * p.hr_scale)
             hr_h = int(p.height * p.hr_scale)
             if hr_w % 64 or hr_h % 64:
-                gr.Error(
+                raise gr.Error(
                     "HIRES Fix resolution must be divisible by 64 in both dimensions. Please change the upscale factor or disable HIRES Fix."
                 )
 
@@ -157,11 +157,10 @@ class TensorRTScript(scripts.Script):
             77,  # model_type
         )  # TODO: max_embedding, just ignore?
         if len(valid_models) == 0:
-            gr.Error(
+            raise gr.Error(
                 f"""No valid profile found for ({model_name}) LOWRES. Please go to the TensorRT tab and generate an engine with the necessary profile. 
                 If using hires.fix, you need an engine for both the base and upscaled resolutions. Otherwise, use the default (torch) U-Net."""
             )
-            return None, None
         best = idx[np.argmin(distances)]
         best_hr = best
 
@@ -176,7 +175,7 @@ class TensorRTScript(scripts.Script):
                 77,  # model_type
             )  # TODO: max_embedding
             if len(valid_models_hr) == 0:
-                gr.Error(
+                raise gr.Error(
                     f"""No valid profile found for ({model_name}) HIRES. Please go to the TensorRT tab and generate an engine with the necessary profile. 
                     If using hires.fix, you need an engine for both the base and upscaled resolutions. Otherwise, use the default (torch) U-Net."""
                 )
@@ -246,7 +245,7 @@ class TensorRTScript(scripts.Script):
             return
 
         if not sd_unet_option.model_name == p.sd_model_name:
-            gr.Error(
+            raise gr.Error(
                 """Selected torch model ({}) does not match the selected TensorRT U-Net ({}). 
                 Please ensure that both models are the same or select Automatic from the SD UNet dropdown.""".format(
                     p.sd_model_name, sd_unet_option.model_name
@@ -259,8 +258,7 @@ class TensorRTScript(scripts.Script):
             if not self.torch_unet:
                 self.get_loras(p)
         except Exception as e:
-            gr.Error(e)
-            raise e
+            raise gr.Error(e)
 
         self.apply_unet(sd_unet_option)
 
