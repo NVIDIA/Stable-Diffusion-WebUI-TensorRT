@@ -101,7 +101,7 @@ class TrtUnet(sd_unet.SdUnet):
         self.engine.activate(True)
 
     def deactivate(self):
-        del self.engine
+        self.engine = None
 
 
 class TensorRTScript(scripts.Script):
